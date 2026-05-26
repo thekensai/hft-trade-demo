@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trade Signal Terminal</title>
+    <link rel="stylesheet" href="css/shared.css">
+    <link rel="stylesheet" href="css/terminal.css">
+</head>
+<body>
+    <nav class="site-nav">
+        <a href="/" class="nav-logo">◈ TRADE TERMINAL</a>
+        <a href="/" class="nav-link active">Live Terminal</a>
+        <a href="/architecture.html" class="nav-link">Architecture</a>
+        <a href="/performance.html" class="nav-link">Performance</a>
+        <a href="/concurrency.html" class="nav-link">Concurrency</a>
+        <a href="/replay.html" class="nav-link">Replay Engine</a>
+        <span class="nav-spacer"></span>
+        <span class="nav-badge">.NET 8 · SignalR · Channels&lt;T&gt;</span>
+    </nav>
+    <div class="terminal-container">
+        <header class="terminal-header">
+            <div class="header-left">
+                <span class="logo">◈ LIVE FEED</span>
+                <span class="status-dot" id="connectionDot"></span>
+                <span class="status-text" id="connectionStatus">CONNECTING...</span>
+            </div>
+            <div class="header-right">
+                <span class="stat-badge" id="throughputBadge">0 msg/s</span>
+                <span class="stat-badge" id="queueDepthBadge">Q: 0</span>
+                <span class="clock" id="clock">00:00:00.000</span>
+            </div>
+        </header>
+
+        <div class="main-grid">
+            <!-- Live Ticker Tape -->
+            <section class="ticker-tape-container">
+                <div class="ticker-tape" id="tickerTape"></div>
+            </section>
+
+            <!-- Price Grid -->
+            <section class="panel price-grid-panel">
+                <div class="panel-title">LIVE PRICES</div>
+                <div class="price-grid" id="priceGrid"></div>
+            </section>
+
+            <!-- Trade Signal Feed (fast scroll) -->
+            <section class="panel signal-feed-panel">
+                <div class="panel-title">
+                    SIGNAL FEED
+                    <span class="feed-count" id="feedCount">0</span>
+                </div>
+                <div class="signal-feed" id="signalFeed"></div>
+            </section>
+
+            <!-- Order Flow Heatmap -->
+            <section class="panel order-flow-panel">
+                <div class="panel-title">ORDER FLOW</div>
+                <div class="order-flow" id="orderFlow"></div>
+            </section>
+
+            <!-- Stats Panel -->
+            <section class="panel stats-panel">
+                <div class="panel-title">THROUGHPUT STATS</div>
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <div class="stat-label">PROCESSED</div>
+                        <div class="stat-value" id="statProcessed">0</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">DROPPED</div>
+                        <div class="stat-value stat-warn" id="statDropped">0</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">QUEUE DEPTH</div>
+                        <div class="stat-value" id="statQueueDepth">0</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">MSG/SEC (CLIENT)</div>
+                        <div class="stat-value" id="statMsgSec">0</div>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
+    <script src="js/terminal.js"></script>
+</body>
+</html>

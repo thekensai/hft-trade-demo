@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Architecture — Trade Signal Terminal</title>
+    <link rel="stylesheet" href="css/shared.css">
+</head>
+<body>
+    <nav class="site-nav">
+        <a href="/" class="nav-logo">◈ TRADE TERMINAL</a>
+        <a href="/" class="nav-link">Live Terminal</a>
+        <a href="/architecture.html" class="nav-link active">Architecture</a>
+        <a href="/performance.html" class="nav-link">Performance</a>
+        <a href="/concurrency.html" class="nav-link">Concurrency</a>
+        <a href="/replay.html" class="nav-link">Replay Engine</a>
+        <span class="nav-spacer"></span>
+        <span class="nav-badge">.NET 8 · SignalR · Channels&lt;T&gt;</span>
+    </nav>
+
+    <div class="page-content">
+        <h1 class="page-title">System Architecture</h1>
+        <p class="page-subtitle">High-throughput event processing pipeline for real-time market data distribution</p>
+
+        <!-- ── System Flow ── -->
+        <div class="section">
+            <h2 class="section-title">Data Flow Pipeline</h2>
+            <div class="section-body">
+                <p>The system models a complete market data distribution pipeline — from simulated exchange feeds through queue-based ingestion to real-time client broadcast. Each stage is designed for <strong>maximum throughput with controlled backpressure</strong>.</p>
+            </div>
+            <div class="flowchart">
+┌─────────────────────────────────┐
+│   Market Feed Simulator         │  Produces 200–20K msgs/sec
+│   (Multiple Exchange Sources)   │  Random walk + configurable volatility
+└──────────────┬──────────────────┘
+               │ TryWrite (lock-free)
+               ▼
+┌─────────────────────────────────┐
+│   Bounded Channel&lt;TradeSignal&gt;  │  Capacity: 10,000
+│   (Backpressure Queue)          │  FullMode: DropOldest
+│                                 │  SingleReader: true
+│                                 │  SingleWriter: false
+└──────────────┬──────────────────┘
+               │ ReadAllAsync (IAsyncEnumerable)
+               ▼
+┌─────────────────────────────────┐
+│   Signal Processing Engine      │  Batch drain (up to 50 per cycle)
+│   (TradeQueueProcessor)         │  Latency measurement per batch
+│                                 │  Interlocked counters (lock-free)
+└──────────────┬──────────────────┘
+               │ SendAsync (SignalR)
+               ▼
+┌─────────────────────────────────┐
+│   Real-time Broadcast Hub       │  WebSocket transport
+│   (SignalR Hub)                  │  Per-symbol group subscriptions
+│                                 │  Binary MessagePack option
+└──────────────┬──────────────────┘
+               │
+               ▼
+┌─────────────────────────────────┐
+│   Trading Terminal UI           │  60-row signal feed (bounded DOM)
+│   (Browser Clients)             │  Virtual ticker tape
+│                                 │  Order flow aggregation
+└─────────────────────────────────┘</div>
+        </div>
+
+        <!-- ── Design Decisions ── -->
+        <div class="section">
+            <h2 class="section-title">Key Design Decisions</h2>
+            <div class="section-body">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>DECISION</th>
+                            <th>RATIONALE</th>
+                            <th>TRADING RELEVANCE</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><strong>Bounded Channel (10K)</strong></td>
+                            <td>Prevents unbounded memory growth; mirrors Service Bus queue semantics</td>
+                            <td>Exchange feeds can burst; must handle without OOM</td>
+                        </tr>
+                        <tr>
+                            <td><strong>DropOldest policy</strong></td>
+                            <td>Stale market data is worthless — always prefer newest quotes</td>
+                            <td>Unlike e-commerce where order matters, trading needs freshness</td>
+                        </tr>
+                        <tr>
+                            <td><strong>SingleReader=true</strong></td>
+                            <td>Enables internal optimizations; guarantees ordering within consumer</td>
+                            <td>Trade sequence order matters for audit trails</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Batch drain (50)</strong></td>
+                            <td>Amortizes syscall and serialization overhead across messages</td>
+                            <td>Mirrors Service Bus PeekLock batch receive patterns</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Interlocked counters</strong></td>
+                            <td>Lock-free stats on the hot path; no mutex contention</td>
+                            <td>Critical when processing >10K msgs/sec</td>
+                        </tr>
+                        <tr>
+                            <td><strong>ArrayPool for metrics</strong></td>
+                            <td>Percentile computation without GC pressure</td>
+                            <td>GC pauses are unacceptable in latency-sensitive paths</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- ── Latency Budget ── -->
+        <div class="section">
+            <h2 class="section-title">Latency Budget</h2>
+            <div class="section-body">
+                <p>End-to-end latency from event generation to client receipt, broken down by stage:</p>
+            </div>
+            <div class="metric-grid">
+                <div class="metric-card">
+                    <div class="metric-card-label">ENQUEUE</div>
+                    <div class="metric-card-value">&lt;1</div>
+                    <div class="metric-card-unit">microsecond (TryWrite)</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-card-label">QUEUE WAIT</div>
+                    <div class="metric-card-value">~50</div>
+                    <div class="metric-card-unit">microseconds (avg)</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-card-label">BATCH PROCESS</div>
+                    <div class="metric-card-value">100–500</div>
+                    <div class="metric-card-unit">microseconds per batch</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-card-label">SIGNALR SEND</div>
+                    <div class="metric-card-value">1–5</div>
+                    <div class="metric-card-unit">milliseconds (network)</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-card-label">CLIENT RENDER</div>
+                    <div class="metric-card-value">&lt;16</div>
+                    <div class="metric-card-unit">milliseconds (60fps target)</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-card-label">E2E TARGET</div>
+                    <div class="metric-card-value">&lt;20</div>
+                    <div class="metric-card-unit">milliseconds total</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── Scaling Approach ── -->
+        <div class="section">
+            <h2 class="section-title">Scaling Strategy</h2>
+            <div class="section-body">
+                <p>The architecture scales horizontally at each layer:</p>
+                <ul class="feature-list">
+                    <li><strong>Feed ingestion:</strong> Multiple simulator instances can write concurrently (SingleWriter=false). In production, each exchange connection is a separate producer thread.</li>
+                    <li><strong>Queue processing:</strong> Single consumer with batch drain achieves >20K msgs/sec. For higher throughput, partition by symbol hash across multiple Channel instances.</li>
+                    <li><strong>Broadcast:</strong> SignalR supports Azure SignalR Service backplane for horizontal scale-out across multiple app instances.</li>
+                    <li><strong>Client fanout:</strong> Per-symbol group subscriptions mean clients only receive data they need — reducing bandwidth proportionally.</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- ── Failure Handling ── -->
+        <div class="section">
+            <h2 class="section-title">Failure Handling</h2>
+            <div class="section-body">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>FAILURE MODE</th>
+                            <th>BEHAVIOR</th>
+                            <th>RECOVERY</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Queue full (backpressure)</td>
+                            <td>DropOldest — newest data preserved</td>
+                            <td>Automatic; counter incremented for observability</td>
+                        </tr>
+                        <tr>
+                            <td>Client disconnect</td>
+                            <td>SignalR automatic reconnect (0s, 1s, 2s, 5s, 10s)</td>
+                            <td>Client resumes subscription; missed data is acceptable (live feed)</td>
+                        </tr>
+                        <tr>
+                            <td>Exchange disconnect (simulated)</td>
+                            <td>Feed pauses; queue drains existing messages</td>
+                            <td>Reconnect resumes feed; UI shows disconnect indicator</td>
+                        </tr>
+                        <tr>
+                            <td>Consumer crash</td>
+                            <td>Channel buffers up to 10K messages</td>
+                            <td>Hosted service restarts; buffer provides grace period</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- ── Deployment Topology ── -->
+        <div class="section">
+            <h2 class="section-title">Deployment Topology</h2>
+            <div class="flowchart">
+┌──────────────────────────────────────────────────────────┐
+│  Azure Container Apps Environment                        │
+│                                                          │
+│  ┌────────────────────────────────────────────────────┐  │
+│  │  Container: tradedemo-api                          │  │
+│  │  ┌──────────────┐  ┌───────────────────────────┐  │  │
+│  │  │ ASP.NET Core │  │ Background Services        │  │  │
+│  │  │ (Kestrel)    │  │ - MarketDataSimulator     │  │  │
+│  │  │ - SignalR Hub│  │ - TradeQueueProcessor     │  │  │
+│  │  │ - Static UI  │  │ - PerformanceMetrics      │  │  │
+│  │  │ - REST API   │  │                           │  │  │
+│  │  └──────────────┘  └───────────────────────────┘  │  │
+│  └────────────────────────────────────────────────────┘  │
+│                          │                               │
+│  ┌───────────────────────▼────────────────────────────┐  │
+│  │  Log Analytics Workspace                           │  │
+│  │  (Structured logs, metrics, traces)                │  │
+│  └────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────┘
+               │
+               ▼
+┌──────────────────────────┐
+│  Azure Service Bus       │
+│  Queue: market-events    │
+│  (Production path)       │
+└──────────────────────────┘</div>
+        </div>
+    </div>
+</body>
+</html>

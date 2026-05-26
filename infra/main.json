@@ -1,0 +1,187 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.43.8.12551",
+      "templateHash": "16213549861331644791"
+    }
+  },
+  "parameters": {
+    "baseName": {
+      "type": "string",
+      "defaultValue": "tradedemo",
+      "metadata": {
+        "description": "Base name for all resources"
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Azure region"
+      }
+    },
+    "containerImage": {
+      "type": "string",
+      "defaultValue": "mcr.microsoft.com/dotnet/samples:aspnetapp",
+      "metadata": {
+        "description": "Container image (set after first ACR push)"
+      }
+    }
+  },
+  "variables": {
+    "suffix": "[take(uniqueString(subscription().subscriptionId, resourceGroup().id), 6)]",
+    "logAnalyticsName": "[format('{0}-logs-{1}', parameters('baseName'), variables('suffix'))]",
+    "containerEnvName": "[format('{0}-env-{1}', parameters('baseName'), variables('suffix'))]",
+    "containerAppName": "[format('{0}-app-{1}', parameters('baseName'), variables('suffix'))]",
+    "serviceBusNamespaceName": "[format('{0}-bus-{1}', parameters('baseName'), variables('suffix'))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.OperationalInsights/workspaces",
+      "apiVersion": "2023-09-01",
+      "name": "[variables('logAnalyticsName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "sku": {
+          "name": "PerGB2018"
+        },
+        "retentionInDays": 30
+      }
+    },
+    {
+      "type": "Microsoft.App/managedEnvironments",
+      "apiVersion": "2024-03-01",
+      "name": "[variables('containerEnvName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "appLogsConfiguration": {
+          "destination": "log-analytics",
+          "logAnalyticsConfiguration": {
+            "customerId": "[reference(resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsName')), '2023-09-01').customerId]",
+            "sharedKey": "[listKeys(resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsName')), '2023-09-01').primarySharedKey]"
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.App/containerApps",
+      "apiVersion": "2024-03-01",
+      "name": "[variables('containerAppName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', variables('containerEnvName'))]",
+        "configuration": {
+          "ingress": {
+            "external": true,
+            "targetPort": 8080,
+            "transport": "auto",
+            "allowInsecure": false
+          }
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "tradedemo-api",
+              "image": "[parameters('containerImage')]",
+              "resources": {
+                "cpu": "[json('0.5')]",
+                "memory": "1Gi"
+              },
+              "env": [
+                {
+                  "name": "ASPNETCORE_URLS",
+                  "value": "http://+:8080"
+                },
+                {
+                  "name": "ServiceBus__ConnectionString",
+                  "value": "[listKeys(resourceId('Microsoft.ServiceBus/namespaces/AuthorizationRules', variables('serviceBusNamespaceName'), 'app-send-listen'), '2022-10-01-preview').primaryConnectionString]"
+                },
+                {
+                  "name": "ServiceBus__QueueName",
+                  "value": "market-events"
+                }
+              ]
+            }
+          ],
+          "scale": {
+            "minReplicas": 1,
+            "maxReplicas": 3
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.App/managedEnvironments', variables('containerEnvName'))]",
+        "[resourceId('Microsoft.ServiceBus/namespaces/AuthorizationRules', variables('serviceBusNamespaceName'), 'app-send-listen')]",
+        "[resourceId('Microsoft.ServiceBus/namespaces/queues', variables('serviceBusNamespaceName'), 'market-events')]"
+      ]
+    },
+    {
+      "type": "Microsoft.ServiceBus/namespaces",
+      "apiVersion": "2022-10-01-preview",
+      "name": "[variables('serviceBusNamespaceName')]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "Standard",
+        "tier": "Standard"
+      }
+    },
+    {
+      "type": "Microsoft.ServiceBus/namespaces/queues",
+      "apiVersion": "2022-10-01-preview",
+      "name": "[format('{0}/{1}', variables('serviceBusNamespaceName'), 'market-events')]",
+      "properties": {
+        "maxDeliveryCount": 10,
+        "defaultMessageTimeToLive": "PT5M",
+        "lockDuration": "PT30S",
+        "maxSizeInMegabytes": 1024,
+        "enableBatchedOperations": true,
+        "enablePartitioning": true
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ServiceBus/namespaces', variables('serviceBusNamespaceName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.ServiceBus/namespaces/AuthorizationRules",
+      "apiVersion": "2022-10-01-preview",
+      "name": "[format('{0}/{1}', variables('serviceBusNamespaceName'), 'app-send-listen')]",
+      "properties": {
+        "rights": [
+          "Send",
+          "Listen"
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ServiceBus/namespaces', variables('serviceBusNamespaceName'))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "appUrl": {
+      "type": "string",
+      "value": "[format('https://{0}', reference(resourceId('Microsoft.App/containerApps', variables('containerAppName')), '2024-03-01').configuration.ingress.fqdn)]"
+    },
+    "containerAppName": {
+      "type": "string",
+      "value": "[variables('containerAppName')]"
+    },
+    "containerEnvName": {
+      "type": "string",
+      "value": "[variables('containerEnvName')]"
+    },
+    "serviceBusNamespaceName": {
+      "type": "string",
+      "value": "[variables('serviceBusNamespaceName')]"
+    },
+    "queueName": {
+      "type": "string",
+      "value": "market-events"
+    }
+  }
+}

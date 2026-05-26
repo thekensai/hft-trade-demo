@@ -1,0 +1,29 @@
+{
+  "version": 2,
+  "dgSpecHash": "vRQnutlD0Sg=",
+  "success": true,
+  "projectFilePath": "C:\\Users\\Jerry.Wang\\Downloads\\work2026\\Azure\\TradeDemo\\src\\TradeDemo.Wpf\\TradeDemo.Wpf.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\Jerry.Wang\\.nuget\\packages\\microsoft.aspnetcore.connections.abstractions\\8.0.6\\microsoft.aspnetcore.connections.abstractions.8.0.6.nupkg.sha512",
+    "C:\\Users\\Jerry.Wang\\.nuget\\packages\\microsoft.aspnetcore.http.connections.client\\8.0.6\\microsoft.aspnetcore.http.connections.client.8.0.6.nupkg.sha512",
+    "C:\\Users\\Jerry.Wang\\.nuget\\packages\\microsoft.aspnetcore.http.connections.common\\8.0.6\\microsoft.aspnetcore.http.connections.common.8.0.6.nupkg.sha512",
+    "C:\\Users\\Jerry.Wang\\.nuget\\packages\\microsoft.aspnetcore.signalr.client\\8.0.6\\microsoft.aspnetcore.signalr.client.8.0.6.nupkg.sha512",
+    "C:\\Users\\Jerry.Wang\\.nuget\\packages\\microsoft.aspnetcore.signalr.client.core\\8.0.6\\microsoft.aspnetcore.signalr.client.core.8.0.6.nupkg.sha512",
+    "C:\\Users\\Jerry.Wang\\.nuget\\packages\\microsoft.aspnetcore.signalr.common\\8.0.6\\microsoft.aspnetcore.signalr.common.8.0.6.nupkg.sha512",
+    "C:\\Users\\Jerry.Wang\\.nuget\\packages\\microsoft.aspnetcore.signalr.protocols.json\\8.0.6\\microsoft.aspnetcore.signalr.protocols.json.8.0.6.nupkg.sha512",
+    "C:\\Users\\Jerry.Wang\\.nuget\\packages\\microsoft.extensions.dependencyinjection\\8.0.0\\microsoft.extensions.dependencyinjection.8.0.0.nupkg.sha512",
+    "C:\\Users\\Jerry.Wang\\.nuget\\packages\\microsoft.extensions.dependencyinjection.abstractions\\8.0.1\\microsoft.extensions.dependencyinjection.abstractions.8.0.1.nupkg.sha512",
+    "C:\\Users\\Jerry.Wang\\.nuget\\packages\\microsoft.extensions.features\\8.0.6\\microsoft.extensions.features.8.0.6.nupkg.sha512",
+    "C:\\Users\\Jerry.Wang\\.nuget\\packages\\microsoft.extensions.logging\\8.0.0\\microsoft.extensions.logging.8.0.0.nupkg.sha512",
+    "C:\\Users\\Jerry.Wang\\.nuget\\packages\\microsoft.extensions.logging.abstractions\\8.0.1\\microsoft.extensions.logging.abstractions.8.0.1.nupkg.sha512",
+    "C:\\Users\\Jerry.Wang\\.nuget\\packages\\microsoft.extensions.options\\8.0.2\\microsoft.extensions.options.8.0.2.nupkg.sha512",
+    "C:\\Users\\Jerry.Wang\\.nuget\\packages\\microsoft.extensions.primitives\\8.0.0\\microsoft.extensions.primitives.8.0.0.nupkg.sha512",
+    "C:\\Users\\Jerry.Wang\\.nuget\\packages\\system.io.pipelines\\8.0.0\\system.io.pipelines.8.0.0.nupkg.sha512",
+    "C:\\Users\\Jerry.Wang\\.nuget\\packages\\system.threading.channels\\8.0.0\\system.threading.channels.8.0.0.nupkg.sha512",
+    "C:\\Users\\Jerry.Wang\\.nuget\\packages\\microsoft.netcore.app.ref\\8.0.19\\microsoft.netcore.app.ref.8.0.19.nupkg.sha512",
+    "C:\\Users\\Jerry.Wang\\.nuget\\packages\\microsoft.windowsdesktop.app.ref\\8.0.19\\microsoft.windowsdesktop.app.ref.8.0.19.nupkg.sha512",
+    "C:\\Users\\Jerry.Wang\\.nuget\\packages\\microsoft.aspnetcore.app.ref\\8.0.19\\microsoft.aspnetcore.app.ref.8.0.19.nupkg.sha512",
+    "C:\\Users\\Jerry.Wang\\.nuget\\packages\\microsoft.netcore.app.host.win-x64\\8.0.19\\microsoft.netcore.app.host.win-x64.8.0.19.nupkg.sha512"
+  ],
+  "logs": []
+}

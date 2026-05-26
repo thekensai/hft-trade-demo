@@ -1,0 +1,15 @@
+C:\Users\Jerry.Wang\Downloads\work2026\Azure\TradeDemo\src\TradeDemo.Api\bin\Release\net8.0\linux-x64\publish\TradeDemo.Api
+C:\Users\Jerry.Wang\Downloads\work2026\Azure\TradeDemo\src\TradeDemo.Api\bin\Release\net8.0\linux-x64\publish\appsettings.json
+C:\Users\Jerry.Wang\Downloads\work2026\Azure\TradeDemo\src\TradeDemo.Api\bin\Release\net8.0\linux-x64\publish\TradeDemo.Api.dll
+C:\Users\Jerry.Wang\Downloads\work2026\Azure\TradeDemo\src\TradeDemo.Api\bin\Release\net8.0\linux-x64\publish\TradeDemo.Api.deps.json
+C:\Users\Jerry.Wang\Downloads\work2026\Azure\TradeDemo\src\TradeDemo.Api\bin\Release\net8.0\linux-x64\publish\TradeDemo.Api.runtimeconfig.json
+C:\Users\Jerry.Wang\Downloads\work2026\Azure\TradeDemo\src\TradeDemo.Api\bin\Release\net8.0\linux-x64\publish\TradeDemo.Api.pdb
+C:\Users\Jerry.Wang\Downloads\work2026\Azure\TradeDemo\src\TradeDemo.Api\bin\Release\net8.0\linux-x64\publish\Azure.Core.dll
+C:\Users\Jerry.Wang\Downloads\work2026\Azure\TradeDemo\src\TradeDemo.Api\bin\Release\net8.0\linux-x64\publish\Azure.Core.Amqp.dll
+C:\Users\Jerry.Wang\Downloads\work2026\Azure\TradeDemo\src\TradeDemo.Api\bin\Release\net8.0\linux-x64\publish\Azure.Messaging.ServiceBus.dll
+C:\Users\Jerry.Wang\Downloads\work2026\Azure\TradeDemo\src\TradeDemo.Api\bin\Release\net8.0\linux-x64\publish\Microsoft.Azure.Amqp.dll
+C:\Users\Jerry.Wang\Downloads\work2026\Azure\TradeDemo\src\TradeDemo.Api\bin\Release\net8.0\linux-x64\publish\Microsoft.Bcl.AsyncInterfaces.dll
+C:\Users\Jerry.Wang\Downloads\work2026\Azure\TradeDemo\src\TradeDemo.Api\bin\Release\net8.0\linux-x64\publish\Newtonsoft.Json.dll
+C:\Users\Jerry.Wang\Downloads\work2026\Azure\TradeDemo\src\TradeDemo.Api\bin\Release\net8.0\linux-x64\publish\System.ClientModel.dll
+C:\Users\Jerry.Wang\Downloads\work2026\Azure\TradeDemo\src\TradeDemo.Api\bin\Release\net8.0\linux-x64\publish\System.Memory.Data.dll
+C:\Users\Jerry.Wang\Downloads\work2026\Azure\TradeDemo\src\TradeDemo.Api\bin\Release\net8.0\linux-x64\publish\System.Net.WebSockets.WebSocketProtocol.dll
