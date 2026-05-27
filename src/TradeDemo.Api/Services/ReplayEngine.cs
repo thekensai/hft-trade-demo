@@ -24,6 +24,7 @@ public class ReplayEngine
     private readonly ILogger<ReplayEngine> _logger;
     private CancellationTokenSource? _replayCts;
     private static readonly Random _rng = new();
+    private long _sequenceId = 0;
 
     public ReplayState CurrentState { get; private set; } = new();
 
@@ -138,15 +139,24 @@ public class ReplayEngine
                     var change = Math.Round(price - basePrice, 2);
                     var changePct = Math.Round((double)(change / basePrice * 100), 3);
 
+                    // Spread: bid/ask prices with realistic spread
+                    var spread = prices[idx] * (decimal)(_rng.NextDouble() * 0.0002 + 0.0001);
+                    var bidPrice = Math.Round(price - spread / 2, 2);
+                    var askPrice = Math.Round(price + spread / 2, 2);
+                    var midPrice = Math.Round((bidPrice + askPrice) / 2, 2);
+
                     var signal = new TradeSignal(
                         Symbol: symbol,
-                        Price: price,
+                        BidPrice: bidPrice,
+                        AskPrice: askPrice,
+                        MidPrice: midPrice,
                         Change: change,
                         ChangePercent: changePct,
                         Volume: _rng.NextInt64(100, 100000),
                         Exchange: exchange,
                         Timestamp: DateTime.UtcNow,
-                        Direction: _rng.NextDouble() > 0.5 ? "BUY" : "SELL"
+                        Direction: _rng.NextDouble() > 0.5 ? "BUY" : "SELL",
+                        SequenceId: Interlocked.Increment(ref _sequenceId)
                     );
 
                     var enqueueSw = Stopwatch.StartNew();

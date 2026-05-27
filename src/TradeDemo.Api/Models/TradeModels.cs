@@ -2,13 +2,16 @@ namespace TradeDemo.Api.Models;
 
 public record TradeSignal(
     string Symbol,
-    decimal Price,
+    decimal BidPrice,
+    decimal AskPrice,
+    decimal MidPrice,
     decimal Change,
     double ChangePercent,
     long Volume,
     string Exchange,
     DateTime Timestamp,
-    string Direction // "BUY" | "SELL"
+    string Direction, // "BUY" | "SELL"
+    long SequenceId
 );
 
 public record OrderBookEntry(

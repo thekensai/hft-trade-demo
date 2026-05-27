@@ -310,24 +310,24 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         if (!_priceBySymbol.TryGetValue(signal.Symbol, out var priceRow))
         {
-            priceRow = new PriceRow(signal.Symbol, signal.Exchange, signal.Price, signal.ChangePercent);
+            priceRow = new PriceRow(signal.Symbol, signal.Exchange, signal.MidPrice, signal.ChangePercent);
             _priceBySymbol[signal.Symbol] = priceRow;
             PriceRows.Insert(0, priceRow);
         }
         else
         {
-            priceRow.Update(signal.Price, signal.ChangePercent, signal.Exchange);
+            priceRow.Update(signal.MidPrice, signal.ChangePercent, signal.Exchange);
         }
 
         if (!_tickerBySymbol.TryGetValue(signal.Symbol, out var tickerRow))
         {
-            tickerRow = new TickerRow(signal.Symbol, signal.Price, signal.ChangePercent);
+            tickerRow = new TickerRow(signal.Symbol, signal.MidPrice, signal.ChangePercent);
             _tickerBySymbol[signal.Symbol] = tickerRow;
             TickerItems.Add(tickerRow);
         }
         else
         {
-            tickerRow.Update(signal.Price, signal.ChangePercent);
+            tickerRow.Update(signal.MidPrice, signal.ChangePercent);
         }
     }
 
@@ -336,7 +336,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         var feedRow = new FeedRow(
             signal.Timestamp.ToLocalTime().ToString("HH:mm:ss", CultureInfo.InvariantCulture),
             signal.Symbol,
-            signal.Price,
+            signal.MidPrice,
             signal.Volume,
             signal.Direction);
 
@@ -423,13 +423,16 @@ public sealed class QueueStatsResponse
 public sealed class TradeSignal
 {
     public required string Symbol { get; set; }
-    public decimal Price { get; set; }
+    public decimal BidPrice { get; set; }
+    public decimal AskPrice { get; set; }
+    public decimal MidPrice { get; set; }
     public decimal Change { get; set; }
     public double ChangePercent { get; set; }
     public long Volume { get; set; }
     public required string Exchange { get; set; }
     public DateTime Timestamp { get; set; }
     public required string Direction { get; set; }
+    public long SequenceId { get; set; }
 }
 
 public sealed class PriceRow : INotifyPropertyChanged
