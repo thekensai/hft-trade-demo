@@ -198,3 +198,7 @@ venv.bak/
 # Code-analyzer agent output files
 /files/
 /.ai/
+
+/HFT_Strategy
+*.explain.md
+claude_prompt.txt

@@ -4,8 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Trade Signal Terminal</title>
-    <link rel="stylesheet" href="css/shared.css">
-    <link rel="stylesheet" href="css/terminal.css">
+    <link rel="stylesheet" href="css/shared.css?v=20260529143516">
+    <link rel="stylesheet" href="css/terminal.css?v=20260529143516">
 </head>
 <body>
     <nav class="site-nav">
@@ -26,6 +26,7 @@
                 <span class="status-text" id="connectionStatus">CONNECTING...</span>
             </div>
             <div class="header-right">
+                <button class="pause-resume-button" id="pauseResumeButton" type="button">Pause</button>
                 <span class="stat-badge" id="throughputBadge">0 msg/s</span>
                 <span class="stat-badge" id="queueDepthBadge">Q: 0</span>
                 <span class="clock" id="clock">00:00:00.000</span>
@@ -81,10 +82,17 @@
                     </div>
                 </div>
             </section>
+
+            <!-- Event Rate Graph -->
+            <section class="panel rate-graph-panel">
+                <div class="panel-title">EVENT RATE (msg/s)</div>
+                <canvas id="rateGraph"></canvas>
+                <div class="rate-time-axis" id="rateTimeAxis"></div>
+            </section>
         </div>
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
-    <script src="js/terminal.js"></script>
+    <script src="js/terminal.js?v=20260529143516"></script>
 </body>
 </html>

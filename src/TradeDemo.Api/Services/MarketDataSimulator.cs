@@ -100,11 +100,11 @@ public class MarketDataSimulator : BackgroundService
             for (int i = 0; i < burstSize; i++)
             {
                 var idx = _rng.Next(Instruments.Length);
-                var (symbol, _, exchange) = Instruments[idx];
+                var (symbol, basePrice, exchange) = Instruments[idx];
 
-                // Random walk price
-                var delta = (decimal)(_rng.NextDouble() - 0.498) * _currentPrices[idx] * 0.002m;
-                _currentPrices[idx] = Math.Max(0.01m, _currentPrices[idx] + delta);
+                var reversion = (basePrice - _currentPrices[idx]) * 0.02m;
+                var noise = (decimal)(_rng.NextDouble() - 0.5) * basePrice * 0.001m;
+                _currentPrices[idx] = Math.Clamp(_currentPrices[idx] + reversion + noise, basePrice * 0.92m, basePrice * 1.08m);
                 var price = Math.Round(_currentPrices[idx], 2);
 
                 // Direction with autocorrelation: same-side streaks during momentum

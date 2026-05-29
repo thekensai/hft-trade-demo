@@ -6,7 +6,9 @@ using System.Net.Http;
 using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Shapes;
 using System.Windows.Threading;
 using Microsoft.AspNetCore.SignalR.Client;
 
@@ -36,10 +38,20 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private int _queueDepth;
     private int _clientMsgPerSec;
     private int _msgCounter;
+    private bool _isUiRefreshPaused;
     private string _clockText = DateTime.Now.ToString("HH:mm:ss.fff");
+    private string _rateAxisLabel0 = "-0s";
+    private string _rateAxisLabel1 = "-0s";
+    private string _rateAxisLabel2 = "-0s";
+    private string _rateAxisLabel3 = "-0s";
     private string _connectionStatusText = "DISCONNECTED";
     private Brush _connectionStatusBrush = Brushes.OrangeRed;
     private string _backendBaseUrl = "https://tradedemo-app-mln7un.proudbush-f48dd93b.australiaeast.azurecontainerapps.io";
+
+    // Event rate graph data
+    private readonly int[] _rateHistory = new int[60];
+    private int _rateHistoryIndex = 0;
+    private bool _rateHistoryFilled = false;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -105,12 +117,54 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     public int FeedCount => FeedRows.Count;
 
+    public string PauseResumeButtonText => _isUiRefreshPaused ? "Resume" : "Pause";
+
     public string ClockText
     {
         get => _clockText;
         private set
         {
             _clockText = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public string RateAxisLabel0
+    {
+        get => _rateAxisLabel0;
+        private set
+        {
+            _rateAxisLabel0 = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public string RateAxisLabel1
+    {
+        get => _rateAxisLabel1;
+        private set
+        {
+            _rateAxisLabel1 = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public string RateAxisLabel2
+    {
+        get => _rateAxisLabel2;
+        private set
+        {
+            _rateAxisLabel2 = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public string RateAxisLabel3
+    {
+        get => _rateAxisLabel3;
+        private set
+        {
+            _rateAxisLabel3 = value;
             OnPropertyChanged();
         }
     }
@@ -146,6 +200,15 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _msgRateTimer.Tick += (_, _) =>
         {
             ClientMsgPerSec = _msgCounter;
+
+            // Update rate history for graph
+            _rateHistory[_rateHistoryIndex] = _msgCounter;
+            _rateHistoryIndex = (_rateHistoryIndex + 1) % _rateHistory.Length;
+            if (_rateHistoryIndex == 0) _rateHistoryFilled = true;
+
+            UpdateRateAxisLabels();
+            DrawRateGraph();
+
             _msgCounter = 0;
         };
         _msgRateTimer.Start();
@@ -167,6 +230,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private async void DisconnectButton_Click(object sender, RoutedEventArgs e)
     {
         await DisconnectAsync();
+    }
+
+    private void PauseResumeButton_Click(object sender, RoutedEventArgs e)
+    {
+        _isUiRefreshPaused = !_isUiRefreshPaused;
+        OnPropertyChanged(nameof(PauseResumeButtonText));
     }
 
     private async Task ConnectAsync()
@@ -268,7 +337,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private void DrainPendingSignals()
     {
-        if (_pendingSignals.IsEmpty)
+        if (_isUiRefreshPaused || _pendingSignals.IsEmpty)
         {
             return;
         }
@@ -310,13 +379,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         if (!_priceBySymbol.TryGetValue(signal.Symbol, out var priceRow))
         {
-            priceRow = new PriceRow(signal.Symbol, signal.Exchange, signal.MidPrice, signal.ChangePercent);
+            priceRow = new PriceRow(signal.Symbol, signal.Exchange, signal.MidPrice, signal.BidPrice, signal.AskPrice, signal.ChangePercent);
             _priceBySymbol[signal.Symbol] = priceRow;
             PriceRows.Insert(0, priceRow);
         }
         else
         {
-            priceRow.Update(signal.MidPrice, signal.ChangePercent, signal.Exchange);
+            priceRow.Update(signal.MidPrice, signal.BidPrice, signal.AskPrice, signal.ChangePercent, signal.Exchange);
         }
 
         if (!_tickerBySymbol.TryGetValue(signal.Symbol, out var tickerRow))
@@ -337,6 +406,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             signal.Timestamp.ToLocalTime().ToString("HH:mm:ss", CultureInfo.InvariantCulture),
             signal.Symbol,
             signal.MidPrice,
+            signal.BidPrice,
+            signal.AskPrice,
             signal.Volume,
             signal.Direction);
 
@@ -411,6 +482,102 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
     }
+
+    private void UpdateRateAxisLabels()
+    {
+        var elapsedSeconds = Math.Min(_rateHistory.Length, _rateHistoryFilled ? _rateHistory.Length : _rateHistoryIndex);
+        RateAxisLabel0 = $"-{elapsedSeconds}s";
+        RateAxisLabel1 = $"-{Math.Round(elapsedSeconds * 0.75):0}s";
+        RateAxisLabel2 = $"-{Math.Round(elapsedSeconds * 0.5):0}s";
+        RateAxisLabel3 = $"-{Math.Round(elapsedSeconds * 0.25):0}s";
+    }
+
+    private void DrawRateGraph()
+    {
+        var canvas = FindName("rateGraphCanvas") as Canvas;
+        if (canvas == null) return;
+
+        canvas.Children.Clear();
+
+        var width = canvas.ActualWidth;
+        var height = canvas.ActualHeight;
+
+        if (width <= 0 || height <= 0) return;
+
+        var bgColor = new SolidColorBrush(Color.FromRgb(13, 28, 54));
+        var gridColor = new SolidColorBrush(Color.FromRgb(31, 52, 92));
+        var lineColor = new SolidColorBrush(Color.FromRgb(30, 203, 139));
+        var fillBrush = new SolidColorBrush(Color.FromRgb(30, 203, 139))
+        {
+            Opacity = 0.1
+        };
+
+        var bgRect = new Rectangle { Width = width, Height = height, Fill = bgColor };
+        canvas.Children.Add(bgRect);
+
+        var count = _rateHistoryFilled ? _rateHistory.Length : _rateHistoryIndex;
+        var maxRate = Math.Max(100, _rateHistory.Max());
+
+        for (int i = 0; i <= 4; i++)
+        {
+            var y = (height / 4) * i;
+            var line = new Line
+            {
+                X1 = 0,
+                Y1 = y,
+                X2 = width,
+                Y2 = y,
+                Stroke = gridColor,
+                StrokeThickness = 1
+            };
+            canvas.Children.Add(line);
+        }
+
+        var points = new List<Point>();
+        for (int i = 0; i < count; i++)
+        {
+            var idx = (_rateHistoryIndex - count + i + _rateHistory.Length) % _rateHistory.Length;
+            var x = (width / Math.Max(1, count - 1)) * i;
+            var y = height - ((double)_rateHistory[idx] / maxRate) * height;
+            points.Add(new Point(x, y));
+        }
+
+        if (points.Count > 1)
+        {
+            var polyLine = new Polyline
+            {
+                Points = new PointCollection(points),
+                Stroke = lineColor,
+                StrokeThickness = 2
+            };
+            canvas.Children.Add(polyLine);
+
+            var fillPoints = new List<Point>(points)
+            {
+                new Point(points[^1].X, height),
+                new Point(points[0].X, height)
+            };
+            var polygon = new Polygon
+            {
+                Points = new PointCollection(fillPoints),
+                Fill = fillBrush
+            };
+            canvas.Children.Add(polygon);
+        }
+
+        var currentRate = _rateHistory[(_rateHistoryIndex - 1 + _rateHistory.Length) % _rateHistory.Length];
+        var rateText = new TextBlock
+        {
+            Text = $"{currentRate} msg/s",
+            FontFamily = new FontFamily("Consolas"),
+            FontSize = 11,
+            Foreground = new SolidColorBrush(Color.FromRgb(30, 203, 139)),
+            FontWeight = FontWeights.Bold
+        };
+        Canvas.SetLeft(rateText, 8);
+        Canvas.SetTop(rateText, 4);
+        canvas.Children.Add(rateText);
+    }
 }
 
 public sealed class QueueStatsResponse
@@ -444,17 +611,21 @@ public sealed class PriceRow : INotifyPropertyChanged
     private static readonly Brush NegativeRowBrush = new SolidColorBrush(Color.FromRgb(87, 26, 41));
     private static readonly Brush NeutralRowBrush = new SolidColorBrush(Color.FromRgb(12, 25, 49));
 
-    private decimal _price;
+    private decimal _midPrice;
+    private decimal _bidPrice;
+    private decimal _askPrice;
     private double _changePercent;
     private string _exchange;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
-    public PriceRow(string symbol, string exchange, decimal price, double changePercent)
+    public PriceRow(string symbol, string exchange, decimal midPrice, decimal bidPrice, decimal askPrice, double changePercent)
     {
         Symbol = symbol;
         _exchange = exchange;
-        _price = price;
+        _midPrice = midPrice;
+        _bidPrice = bidPrice;
+        _askPrice = askPrice;
         _changePercent = changePercent;
     }
 
@@ -470,7 +641,8 @@ public sealed class PriceRow : INotifyPropertyChanged
         }
     }
 
-    public string PriceText => _price.ToString("N2", CultureInfo.InvariantCulture);
+    public string BidAskText => $"{_bidPrice:N2} / {_askPrice:N2}";
+    public string MidPriceText => _midPrice.ToString("N2", CultureInfo.InvariantCulture);
     public string ChangePercentText => $"{_changePercent:+0.##;-0.##;0.##}%";
 
     public Brush ChangeBrush => _changePercent switch
@@ -487,12 +659,15 @@ public sealed class PriceRow : INotifyPropertyChanged
         _ => NeutralRowBrush
     };
 
-    public void Update(decimal price, double changePercent, string exchange)
+    public void Update(decimal midPrice, decimal bidPrice, decimal askPrice, double changePercent, string exchange)
     {
-        _price = price;
+        _midPrice = midPrice;
+        _bidPrice = bidPrice;
+        _askPrice = askPrice;
         _changePercent = changePercent;
         Exchange = exchange;
-        OnPropertyChanged(nameof(PriceText));
+        OnPropertyChanged(nameof(BidAskText));
+        OnPropertyChanged(nameof(MidPriceText));
         OnPropertyChanged(nameof(ChangePercentText));
         OnPropertyChanged(nameof(ChangeBrush));
         OnPropertyChanged(nameof(RowBackgroundBrush));
@@ -513,11 +688,13 @@ public sealed class FeedRow
     private static readonly Brush BuyRowBrush = new SolidColorBrush(Color.FromRgb(9, 43, 57));
     private static readonly Brush SellRowBrush = new SolidColorBrush(Color.FromRgb(45, 28, 49));
 
-    public FeedRow(string timeText, string symbol, decimal price, long volume, string direction)
+    public FeedRow(string timeText, string symbol, decimal midPrice, decimal bidPrice, decimal askPrice, long volume, string direction)
     {
         TimeText = timeText;
         Symbol = symbol;
-        PriceText = price.ToString("N2", CultureInfo.InvariantCulture);
+        var execPrice = direction == "BUY" ? askPrice : bidPrice;
+        PriceText = execPrice.ToString("N2", CultureInfo.InvariantCulture);
+        BidAskFeedText = $"{bidPrice:N2}/{askPrice:N2}";
         VolumeText = volume >= 1000 ? $"{volume / 1000.0:0.#}K" : volume.ToString(CultureInfo.InvariantCulture);
         Direction = direction;
     }
@@ -525,6 +702,7 @@ public sealed class FeedRow
     public string TimeText { get; }
     public string Symbol { get; }
     public string PriceText { get; }
+    public string BidAskFeedText { get; }
     public string VolumeText { get; }
     public string Direction { get; }
 

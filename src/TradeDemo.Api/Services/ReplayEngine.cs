@@ -131,10 +131,10 @@ public class ReplayEngine
                     var idx = _rng.Next(Instruments.Length);
                     var (symbol, basePrice, exchange) = Instruments[idx];
 
-                    // Volatility based on scenario
                     var volatility = scenario.Volatility;
-                    var delta = (decimal)(_rng.NextDouble() - 0.498) * prices[idx] * volatility;
-                    prices[idx] = Math.Max(0.01m, prices[idx] + delta);
+                    var reversion = (basePrice - prices[idx]) * 0.02m;
+                    var noise = (decimal)(_rng.NextDouble() - 0.5) * basePrice * volatility;
+                    prices[idx] = Math.Clamp(prices[idx] + reversion + noise, basePrice * 0.85m, basePrice * 1.15m);
                     var price = Math.Round(prices[idx], 2);
                     var change = Math.Round(price - basePrice, 2);
                     var changePct = Math.Round((double)(change / basePrice * 100), 3);

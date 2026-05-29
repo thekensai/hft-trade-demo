@@ -95,6 +95,7 @@
                     <TextBox Width="520" Text="{Binding BackendBaseUrl, UpdateSourceTrigger=PropertyChanged}" Background="#091731" Foreground="#d6e2ff" BorderBrush="#2e4d7f" BorderThickness="1" Padding="8,5" FontFamily="Consolas"/>
                     <Button Content="Connect" Margin="10,0,0,0" Padding="14,6" Background="#113862" Foreground="#dff3ff" BorderBrush="#2e5f95" Click="ConnectButton_Click"/>
                     <Button Content="Disconnect" Margin="6,0,0,0" Padding="14,6" Background="#3b1f31" Foreground="#ffd7df" BorderBrush="#75445a" Click="DisconnectButton_Click"/>
+                    <Button Content="{Binding PauseResumeButtonText}" Margin="6,0,0,0" Padding="14,6" Background="#24385c" Foreground="#dff3ff" BorderBrush="#4f6f9f" Click="PauseResumeButton_Click"/>
                 </StackPanel>
 
                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
@@ -132,15 +133,15 @@
 
         <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="0.34*"/>
-                <ColumnDefinition Width="0.42*"/>
-                <ColumnDefinition Width="0.24*"/>
+                <ColumnDefinition Width="0.32*"/>
+                <ColumnDefinition Width="0.40*"/>
+                <ColumnDefinition Width="0.28*"/>
             </Grid.ColumnDefinitions>
 
             <Border Grid.Column="0" Style="{StaticResource PanelStyle}">
                 <DockPanel>
                     <TextBlock DockPanel.Dock="Top" Text="LIVE PRICES" FontFamily="Consolas" FontSize="17" FontWeight="Bold" Margin="0,0,0,10" Foreground="#7c95bf"/>
-                    <DataGrid ItemsSource="{Binding PriceRows}" Style="{StaticResource TerminalGridBase}" FontSize="22" FontFamily="Consolas" RowHeight="54" CellStyle="{StaticResource TerminalCellStyle}">
+                    <DataGrid ItemsSource="{Binding PriceRows}" Style="{StaticResource TerminalGridBase}" FontSize="18" FontFamily="Consolas" RowHeight="54" CellStyle="{StaticResource TerminalCellStyle}">
                         <DataGrid.RowStyle>
                             <Style TargetType="DataGridRow">
                                 <Setter Property="Background" Value="{Binding RowBackgroundBrush}"/>
@@ -149,7 +150,7 @@
                             </Style>
                         </DataGrid.RowStyle>
                         <DataGrid.Columns>
-                            <DataGridTextColumn Binding="{Binding Symbol}" Width="1.1*">
+                            <DataGridTextColumn Binding="{Binding Symbol}" Width="0.9*">
                                 <DataGridTextColumn.ElementStyle>
                                     <Style TargetType="TextBlock">
                                         <Setter Property="Foreground" Value="#e6efff"/>
@@ -157,25 +158,26 @@
                                     </Style>
                                 </DataGridTextColumn.ElementStyle>
                             </DataGridTextColumn>
-                            <DataGridTextColumn Binding="{Binding PriceText}" Width="1*">
+                            <DataGridTextColumn Binding="{Binding BidAskText}" Width="1.1*">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Foreground" Value="#8aa0c7"/>
+                                        <Setter Property="FontSize" Value="14"/>
+                                    </Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
+                            <DataGridTextColumn Binding="{Binding MidPriceText}" Width="0.9*">
                                 <DataGridTextColumn.ElementStyle>
                                     <Style TargetType="TextBlock">
                                         <Setter Property="Foreground" Value="{Binding ChangeBrush}"/>
                                     </Style>
                                 </DataGridTextColumn.ElementStyle>
                             </DataGridTextColumn>
-                            <DataGridTextColumn Binding="{Binding ChangePercentText}" Width="0.9*">
+                            <DataGridTextColumn Binding="{Binding ChangePercentText}" Width="0.8*">
                                 <DataGridTextColumn.ElementStyle>
                                     <Style TargetType="TextBlock">
                                         <Setter Property="Foreground" Value="{Binding ChangeBrush}"/>
                                         <Setter Property="FontWeight" Value="SemiBold"/>
-                                    </Style>
-                                </DataGridTextColumn.ElementStyle>
-                            </DataGridTextColumn>
-                            <DataGridTextColumn Binding="{Binding Exchange}" Width="0.7*">
-                                <DataGridTextColumn.ElementStyle>
-                                    <Style TargetType="TextBlock">
-                                        <Setter Property="Foreground" Value="#88a2ca"/>
                                     </Style>
                                 </DataGridTextColumn.ElementStyle>
                             </DataGridTextColumn>
@@ -196,7 +198,7 @@
                             <TextBlock Text="{Binding FeedCount}" Foreground="White" FontFamily="Consolas" FontWeight="Bold"/>
                         </Border>
                     </Grid>
-                    <DataGrid ItemsSource="{Binding FeedRows}" Style="{StaticResource TerminalGridBase}" FontSize="18" FontFamily="Consolas" RowHeight="38" CellStyle="{StaticResource TerminalCellStyle}">
+                    <DataGrid ItemsSource="{Binding FeedRows}" Style="{StaticResource TerminalGridBase}" FontSize="15" FontFamily="Consolas" RowHeight="34" CellStyle="{StaticResource TerminalCellStyle}">
                         <DataGrid.RowStyle>
                             <Style TargetType="DataGridRow">
                                 <Setter Property="Background" Value="{Binding RowBackgroundBrush}"/>
@@ -204,14 +206,15 @@
                             </Style>
                         </DataGrid.RowStyle>
                         <DataGrid.Columns>
-                            <DataGridTextColumn Binding="{Binding TimeText}" Width="0.9*">
+                            <DataGridTextColumn Binding="{Binding TimeText}" Width="0.8*">
                                 <DataGridTextColumn.ElementStyle>
                                     <Style TargetType="TextBlock">
                                         <Setter Property="Foreground" Value="#8ba4cd"/>
+                                        <Setter Property="FontSize" Value="13"/>
                                     </Style>
                                 </DataGridTextColumn.ElementStyle>
                             </DataGridTextColumn>
-                            <DataGridTextColumn Binding="{Binding Symbol}" Width="1*">
+                            <DataGridTextColumn Binding="{Binding Symbol}" Width="0.9*">
                                 <DataGridTextColumn.ElementStyle>
                                     <Style TargetType="TextBlock">
                                         <Setter Property="Foreground" Value="#dce8ff"/>
@@ -219,21 +222,30 @@
                                     </Style>
                                 </DataGridTextColumn.ElementStyle>
                             </DataGridTextColumn>
-                            <DataGridTextColumn Binding="{Binding PriceText}" Width="1*">
+                            <DataGridTextColumn Binding="{Binding PriceText}" Width="0.8*">
                                 <DataGridTextColumn.ElementStyle>
                                     <Style TargetType="TextBlock">
                                         <Setter Property="Foreground" Value="{Binding PriceBrush}"/>
                                     </Style>
                                 </DataGridTextColumn.ElementStyle>
                             </DataGridTextColumn>
-                            <DataGridTextColumn Binding="{Binding VolumeText}" Width="0.8*">
+                            <DataGridTextColumn Binding="{Binding BidAskFeedText}" Width="1.0*">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Foreground" Value="#7a8cb0"/>
+                                        <Setter Property="FontSize" Value="12"/>
+                                        <Setter Property="FontFamily" Value="Consolas"/>
+                                    </Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
+                            <DataGridTextColumn Binding="{Binding VolumeText}" Width="0.6*">
                                 <DataGridTextColumn.ElementStyle>
                                     <Style TargetType="TextBlock">
                                         <Setter Property="Foreground" Value="#91a9d2"/>
                                     </Style>
                                 </DataGridTextColumn.ElementStyle>
                             </DataGridTextColumn>
-                            <DataGridTextColumn Binding="{Binding Direction}" Width="0.8*">
+                            <DataGridTextColumn Binding="{Binding Direction}" Width="0.6*">
                                 <DataGridTextColumn.ElementStyle>
                                     <Style TargetType="TextBlock">
                                         <Setter Property="Foreground" Value="{Binding DirectionBrush}"/>
@@ -248,8 +260,9 @@
 
             <Grid Grid.Column="2">
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="0.62*"/>
-                    <RowDefinition Height="0.38*"/>
+                    <RowDefinition Height="0.45*"/>
+                    <RowDefinition Height="0.35*"/>
+                    <RowDefinition Height="0.20*"/>
                 </Grid.RowDefinitions>
 
                 <Border Grid.Row="0" Style="{StaticResource PanelStyle}">
@@ -282,23 +295,51 @@
                         <TextBlock DockPanel.Dock="Top" Text="THROUGHPUT STATS" FontFamily="Consolas" FontSize="17" FontWeight="Bold" Margin="0,0,0,10" Foreground="#7c95bf"/>
                         <UniformGrid Rows="2" Columns="2">
                             <StackPanel Margin="8">
-                                <TextBlock Text="PROCESSED" Foreground="#6e88b4" FontFamily="Consolas"/>
-                                <TextBlock Text="{Binding ProcessedCount}" Foreground="{StaticResource CyanBrush}" FontFamily="Consolas" FontSize="34" FontWeight="Bold"/>
+                                <TextBlock Text="PROCESSED" Foreground="#6e88b4" FontFamily="Consolas" FontSize="12"/>
+                                <TextBlock Text="{Binding ProcessedCount}" Foreground="{StaticResource CyanBrush}" FontFamily="Consolas" FontSize="28" FontWeight="Bold"/>
                             </StackPanel>
                             <StackPanel Margin="8">
-                                <TextBlock Text="DROPPED" Foreground="#6e88b4" FontFamily="Consolas"/>
-                                <TextBlock Text="{Binding DroppedCount}" Foreground="{StaticResource RedBrush}" FontFamily="Consolas" FontSize="34" FontWeight="Bold"/>
+                                <TextBlock Text="DROPPED" Foreground="#6e88b4" FontFamily="Consolas" FontSize="12"/>
+                                <TextBlock Text="{Binding DroppedCount}" Foreground="{StaticResource RedBrush}" FontFamily="Consolas" FontSize="28" FontWeight="Bold"/>
                             </StackPanel>
                             <StackPanel Margin="8">
-                                <TextBlock Text="QUEUE DEPTH" Foreground="#6e88b4" FontFamily="Consolas"/>
-                                <TextBlock Text="{Binding QueueDepth}" Foreground="#9fd0ff" FontFamily="Consolas" FontSize="34" FontWeight="Bold"/>
+                                <TextBlock Text="QUEUE DEPTH" Foreground="#6e88b4" FontFamily="Consolas" FontSize="12"/>
+                                <TextBlock Text="{Binding QueueDepth}" Foreground="#9fd0ff" FontFamily="Consolas" FontSize="28" FontWeight="Bold"/>
                             </StackPanel>
                             <StackPanel Margin="8">
-                                <TextBlock Text="MSG/SEC (CLIENT)" Foreground="#6e88b4" FontFamily="Consolas"/>
-                                <TextBlock Text="{Binding ClientMsgPerSec}" Foreground="{StaticResource GreenBrush}" FontFamily="Consolas" FontSize="34" FontWeight="Bold"/>
+                                <TextBlock Text="MSG/SEC" Foreground="#6e88b4" FontFamily="Consolas" FontSize="12"/>
+                                <TextBlock Text="{Binding ClientMsgPerSec}" Foreground="{StaticResource GreenBrush}" FontFamily="Consolas" FontSize="28" FontWeight="Bold"/>
                             </StackPanel>
                         </UniformGrid>
                     </DockPanel>
+                </Border>
+
+                <Border Grid.Row="2" Style="{StaticResource PanelStyle}">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0" Text="EVENT RATE (msg/s)" FontFamily="Consolas" FontSize="14" FontWeight="Bold" Margin="0,0,0,8" Foreground="#7c95bf"/>
+                        <Border Grid.Row="1" BorderBrush="#1f345c" BorderThickness="1" CornerRadius="3" Background="#0d1c36" Margin="0,0,0,0">
+                            <Canvas x:Name="rateGraphCanvas" Height="Auto"/>
+                        </Border>
+                        <Grid Grid.Row="2" Margin="0,4,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="{Binding RateAxisLabel0}" Foreground="#64748b" FontFamily="Consolas" FontSize="11" HorizontalAlignment="Left"/>
+                            <TextBlock Grid.Column="1" Text="{Binding RateAxisLabel1}" Foreground="#64748b" FontFamily="Consolas" FontSize="11" HorizontalAlignment="Center"/>
+                            <TextBlock Grid.Column="2" Text="{Binding RateAxisLabel2}" Foreground="#64748b" FontFamily="Consolas" FontSize="11" HorizontalAlignment="Center"/>
+                            <TextBlock Grid.Column="3" Text="{Binding RateAxisLabel3}" Foreground="#64748b" FontFamily="Consolas" FontSize="11" HorizontalAlignment="Center"/>
+                            <TextBlock Grid.Column="4" Text="Now" Foreground="#64748b" FontFamily="Consolas" FontSize="11" HorizontalAlignment="Right"/>
+                        </Grid>
+                    </Grid>
                 </Border>
             </Grid>
         </Grid>

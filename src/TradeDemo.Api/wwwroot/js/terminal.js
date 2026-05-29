@@ -14,10 +14,14 @@ const state = {
     renderBatchSize: 140,
     pendingSignals: [],
     renderScheduled: false,
+    uiRefreshPaused: false,
     tickerDirty: false,
     lastSignalAt: Date.now(),
     reconnectInFlight: false,
     reconnectRetryHandle: null,
+    rateHistory: [],
+    rateHistoryStartedAt: Date.now(),
+    maxRateHistorySeconds: 60,
 };
 
 // ── DOM refs ──
@@ -27,6 +31,7 @@ const dom = {
     throughputBadge: document.getElementById("throughputBadge"),
     queueDepthBadge: document.getElementById("queueDepthBadge"),
     clock: document.getElementById("clock"),
+    pauseResumeButton: document.getElementById("pauseResumeButton"),
     tickerTape: document.getElementById("tickerTape"),
     priceGrid: document.getElementById("priceGrid"),
     signalFeed: document.getElementById("signalFeed"),
@@ -36,6 +41,8 @@ const dom = {
     statDropped: document.getElementById("statDropped"),
     statQueueDepth: document.getElementById("statQueueDepth"),
     statMsgSec: document.getElementById("statMsgSec"),
+    rateGraph: document.getElementById("rateGraph"),
+    rateTimeAxis: document.getElementById("rateTimeAxis"),
 };
 
 // ── Clock ──
@@ -46,6 +53,107 @@ function updateClock() {
 }
 updateClock();
 
+// ── Pause/Resume ──
+dom.pauseResumeButton.addEventListener("click", () => {
+    state.uiRefreshPaused = !state.uiRefreshPaused;
+    dom.pauseResumeButton.textContent = state.uiRefreshPaused ? "Resume" : "Pause";
+
+    if (!state.uiRefreshPaused) {
+        scheduleRender();
+    }
+});
+
+// ── Event Rate Graph ──
+function initRateGraph() {
+    const canvas = dom.rateGraph;
+    if (!canvas) return;
+
+    const ctx = canvas.getContext("2d");
+    const dpr = window.devicePixelRatio || 1;
+
+    // Set canvas size with high DPI support
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    ctx.scale(dpr, dpr);
+
+    return { ctx, width: rect.width, height: rect.height };
+}
+
+function drawRateGraph() {
+    const canvas = dom.rateGraph;
+    if (!canvas) return;
+
+    const { ctx, width, height } = initRateGraph();
+
+    // Clear canvas
+    ctx.clearRect(0, 0, width, height);
+
+    // Draw background
+    ctx.fillStyle = "#0d1c36";
+    ctx.fillRect(0, 0, width, height);
+
+    // Draw grid lines
+    ctx.strokeStyle = "#1f345c";
+    ctx.lineWidth = 1;
+
+    // Horizontal grid lines
+    for (let i = 0; i <= 4; i++) {
+        const y = (height / 4) * i;
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(width, y);
+        ctx.stroke();
+    }
+
+    const history = state.rateHistory;
+    const maxRate = Math.max(100, ...history.map((sample) => sample.rate)) * 1.2;
+
+    ctx.strokeStyle = "#1ecb8b";
+    ctx.lineWidth = 2;
+    ctx.lineJoin = "round";
+
+    if (history.length > 0) {
+        ctx.beginPath();
+        history.forEach((sample, i) => {
+            const x = history.length === 1 ? width : (width / (history.length - 1)) * i;
+            const y = height - (sample.rate / maxRate) * height;
+
+            if (i === 0) {
+                ctx.moveTo(x, y);
+            } else {
+                ctx.lineTo(x, y);
+            }
+        });
+        ctx.stroke();
+
+        ctx.lineTo(width, height);
+        ctx.lineTo(0, height);
+        ctx.closePath();
+        ctx.fillStyle = "rgba(30, 203, 139, 0.1)";
+        ctx.fill();
+    }
+
+    updateRateTimeAxis();
+
+    const currentRate = history.length === 0 ? 0 : history[history.length - 1].rate;
+    ctx.fillStyle = "#1ecb8b";
+    ctx.font = "bold 12px Consolas, monospace";
+    ctx.fillText(`${currentRate.toLocaleString()} msg/s`, 8, 18);
+}
+
+function updateRateTimeAxis() {
+    const elapsedSeconds = Math.min(state.maxRateHistorySeconds, Math.max(0, Math.floor((Date.now() - state.rateHistoryStartedAt) / 1000)));
+    const labels = [elapsedSeconds, Math.round(elapsedSeconds * 0.75), Math.round(elapsedSeconds * 0.5), Math.round(elapsedSeconds * 0.25), 0];
+    dom.rateTimeAxis.innerHTML = labels
+        .map((secondsAgo) => `<span>${secondsAgo === 0 ? "Now" : `-${secondsAgo}s`}</span>`)
+        .join("");
+}
+
+// Initialize and draw rate graph
+setTimeout(() => drawRateGraph(), 100);
+window.addEventListener("resize", drawRateGraph);
+
 // ── Throughput meter ──
 setInterval(() => {
     const elapsed = Math.max(0.001, (Date.now() - state.lastMsgCountReset) / 1000);
@@ -54,6 +162,13 @@ setInterval(() => {
     dom.statMsgSec.textContent = state.msgPerSec.toLocaleString();
     state.msgCount = 0;
     state.lastMsgCountReset = Date.now();
+
+    const elapsedSeconds = Math.floor((Date.now() - state.rateHistoryStartedAt) / 1000);
+    state.rateHistory.push({ elapsedSeconds, rate: state.msgPerSec });
+    while (state.rateHistory.length > state.maxRateHistorySeconds) {
+        state.rateHistory.shift();
+    }
+    drawRateGraph();
 }, 1000);
 
 // ── SignalR Connection ──
@@ -104,7 +219,7 @@ function enqueueSignal(signal) {
 }
 
 function scheduleRender() {
-    if (state.renderScheduled) {
+    if (state.uiRefreshPaused || state.renderScheduled) {
         return;
     }
 
@@ -115,7 +230,7 @@ function scheduleRender() {
 function drainSignals() {
     state.renderScheduled = false;
 
-    if (state.pendingSignals.length === 0) {
+    if (state.uiRefreshPaused || state.pendingSignals.length === 0) {
         return;
     }
 
@@ -171,7 +286,8 @@ function updatePriceGrid(signal) {
         row.id = `price-${signal.symbol}`;
         row.innerHTML = `
             <span class="price-symbol"></span>
-            <span class="price-value"></span>
+            <span class="price-bid-ask"></span>
+            <span class="price-mid"></span>
             <span class="price-change"></span>
             <span class="price-exchange"></span>
         `;
@@ -181,9 +297,13 @@ function updatePriceGrid(signal) {
     row.querySelector(".price-symbol").textContent = signal.symbol;
     row.querySelector(".price-exchange").textContent = signal.exchange;
 
-    const valueEl = row.querySelector(".price-value");
-    valueEl.textContent = formatPrice(signal.price);
-    valueEl.className = `price-value ${isUp ? "ticker-up" : "ticker-down"}`;
+    const bidAskEl = row.querySelector(".price-bid-ask");
+    const spread = signal.askPrice - signal.bidPrice;
+    bidAskEl.textContent = `${formatPrice(signal.bidPrice)} / ${formatPrice(signal.askPrice)}`;
+
+    const midEl = row.querySelector(".price-mid");
+    midEl.textContent = formatPrice(signal.midPrice);
+    midEl.className = `price-mid ${isUp ? "ticker-up" : "ticker-down"}`;
 
     const changeEl = row.querySelector(".price-change");
     changeEl.textContent = `${isUp ? "+" : ""}${signal.changePercent.toFixed(2)}%`;
@@ -204,10 +324,12 @@ function addSignalRow(signal) {
     row.className = `signal-row ${isBuy ? "buy" : "sell"}`;
 
     const time = new Date(signal.timestamp).toISOString().substring(11, 23);
+    const execPrice = isBuy ? signal.askPrice : signal.bidPrice;
     row.innerHTML = `
         <span class="signal-time">${time}</span>
         <span class="signal-symbol">${signal.symbol}</span>
-        <span class="signal-price ${isBuy ? "ticker-up" : "ticker-down"}">${formatPrice(signal.price)}</span>
+        <span class="signal-price ${isBuy ? "ticker-up" : "ticker-down"}">${formatPrice(execPrice)}</span>
+        <span class="signal-spread">${formatPrice(signal.bidPrice)}/${formatPrice(signal.askPrice)}</span>
         <span class="signal-vol">${formatVolume(signal.volume)}</span>
         <span class="signal-dir ${isBuy ? "buy" : "sell"}">${signal.direction}</span>
     `;
@@ -266,7 +388,7 @@ setInterval(() => {
         const arrow = s.change >= 0 ? "▲" : "▼";
         return `<span class="ticker-item">
             <span class="ticker-symbol">${s.symbol}</span>
-            <span class="ticker-price ${cls}">${formatPrice(s.price)} ${arrow} ${Math.abs(s.changePercent).toFixed(2)}%</span>
+            <span class="ticker-price ${cls}">${formatPrice(s.midPrice)} ${arrow} ${Math.abs(s.changePercent).toFixed(2)}%</span>
         </span>`;
     });
 
