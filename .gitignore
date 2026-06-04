@@ -202,3 +202,5 @@ venv.bak/
 /HFT_Strategy
 *.explain.md
 claude_prompt.txt
+/.claude/
+/.vs
