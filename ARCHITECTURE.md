@@ -2,7 +2,7 @@
 
 ## System Overview
 
-A real-time trade signal processing demo built on .NET 8, showcasing high-throughput event ingestion, lock-free metrics, bounded-channel backpressure, and deterministic replay — patterns used in production trading systems.
+A real-time trade signal processing demo built on .NET 8 and hosted on Azure, showcasing high-throughput event ingestion, lock-free metrics, bounded-channel backpressure, and deterministic replay — patterns used in production trading systems.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -23,7 +23,7 @@ A real-time trade signal processing demo built on .NET 8, showcasing high-throug
 │                               │                                     │
 │  ┌──────────────┐    ┌───────▼──────────┐    ┌──────────────────┐  │
 │  │ Replay       │───▶│ SignalR Hub       │───▶│ Browser Clients  │  │
-│  │ Engine       │    │ /tradehub         │    │ (WebSocket)      │  │
+│  │ Engine       │    │ /tradehub         │    │           
 │  └──────────────┘    └──────────────────┘    └──────────────────┘  │
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘

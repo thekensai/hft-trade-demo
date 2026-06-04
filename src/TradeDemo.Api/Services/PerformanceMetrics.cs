@@ -7,7 +7,7 @@ namespace TradeDemo.Api.Services;
 /// <summary>
 /// Lock-free, zero-allocation latency tracker using Interlocked operations.
 /// Maintains a circular buffer of latency samples for percentile calculation.
-/// 
+///
 /// Design choices for trading infrastructure:
 /// - No locks: uses Interlocked.CompareExchange for thread-safe updates
 /// - Pre-allocated circular buffer: no GC pressure during hot path
@@ -33,6 +33,11 @@ public sealed class PerformanceMetrics
     private long _windowMessageCount;
     private long _windowStartTicks;
 
+    // CPU/Memory tracking
+    private Process _currentProcess;
+    private TimeSpan _lastCpuTime;
+    private long _lastCpuCheckTicks;
+
     private const int SampleBufferSize = 4096; // power of 2 for fast modulo
 
     public PerformanceMetrics()
@@ -44,6 +49,9 @@ public sealed class PerformanceMetrics
         _lastGen0 = GC.CollectionCount(0);
         _lastGen1 = GC.CollectionCount(1);
         _lastGen2 = GC.CollectionCount(2);
+        _currentProcess = Process.GetCurrentProcess();
+        _lastCpuTime = _currentProcess.TotalProcessorTime;
+        _lastCpuCheckTicks = Stopwatch.GetTimestamp();
     }
 
     /// <summary>
@@ -56,13 +64,14 @@ public sealed class PerformanceMetrics
         Interlocked.Increment(ref _totalMessages);
         Interlocked.Increment(ref _windowMessageCount);
 
-        // Track peak (lock-free CAS loop)
-        long current;
-        do
+        // Track peak (lock-free CAS loop, no redundant reads)
+        long current = Volatile.Read(ref _peakLatencyTicks);
+        while (elapsedTicks > current) //if other threads have updated the peak to higher value then current, just exit without trying to update
         {
-            current = Interlocked.Read(ref _peakLatencyTicks);
-            if (elapsedTicks <= current) break;
-        } while (Interlocked.CompareExchange(ref _peakLatencyTicks, elapsedTicks, current) != current);
+            long next = Interlocked.CompareExchange(ref _peakLatencyTicks, elapsedTicks, current);
+            if (next == current) break; // exchange succeeded
+            current = next; // use returned value instead of re-reading
+        }
     }
 
     /// <summary>
@@ -110,6 +119,18 @@ public sealed class PerformanceMetrics
             var allocationRate = allocatedBytes - _lastAllocatedBytes;
             _lastAllocatedBytes = allocatedBytes;
 
+            // Calculate CPU usage
+            var currentCpuTime = _currentProcess.TotalProcessorTime;
+            var currentTicks = Stopwatch.GetTimestamp();
+            var cpuElapsedTicks = currentTicks - _lastCpuCheckTicks;
+            var cpuElapsedTime = cpuElapsedTicks / (double)Stopwatch.Frequency;
+            var cpuTimeDelta = currentCpuTime - _lastCpuTime;
+            var cpuUsagePercent = cpuElapsedTime > 0 ? Math.Round((cpuTimeDelta.TotalMilliseconds / Environment.ProcessorCount) / (cpuElapsedTime * 10), 2) : 0;
+
+            // Update CPU tracking
+            _lastCpuTime = currentCpuTime;
+            _lastCpuCheckTicks = currentTicks;
+
             var snapshot = new PerformanceSnapshot
             {
                 P50LatencyUs = TicksToMicroseconds(p50Ticks, tickFrequency),
@@ -131,7 +152,11 @@ public sealed class PerformanceMetrics
                 GcPauseTimeMs = GC.GetTotalPauseDuration().TotalMilliseconds,
                 IsServerGc = GCSettings.IsServerGC,
                 LatencyMode = GCSettings.LatencyMode.ToString(),
-                SampleCount = (int)sampleCount
+                SampleCount = (int)sampleCount,
+                CpuUsagePercent = cpuUsagePercent,
+                MemoryUsageBytes = gcMemory,
+                WorkingSetBytes = _currentProcess.WorkingSet64,
+                ThreadCount = _currentProcess.Threads.Count
             };
 
             _lastGen0 = gen0;
@@ -175,6 +200,12 @@ public class PerformanceSnapshot
     public double GcPauseTimeMs { get; init; }
     public bool IsServerGc { get; init; }
     public string LatencyMode { get; init; } = "";
+
+    // System resources
+    public double CpuUsagePercent { get; init; }
+    public long MemoryUsageBytes { get; init; }
+    public long WorkingSetBytes { get; init; }
+    public int ThreadCount { get; init; }
 
     // Meta
     public double UptimeSeconds { get; init; }

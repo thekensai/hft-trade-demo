@@ -1,4 +1,5 @@
 using System.Threading.Channels;
+using System.Diagnostics;
 using Microsoft.AspNetCore.SignalR;
 using TradeDemo.Api.Hubs;
 using TradeDemo.Api.Models;
@@ -6,14 +7,28 @@ using TradeDemo.Api.Models;
 namespace TradeDemo.Api.Services;
 
 /// <summary>
-/// Simulates high-throughput market data sources (exchanges) pushing events into a queue.
+/// High-throughput market data simulator optimized for 1M+ events/sec.
+///
+/// Key optimizations for 1M/sec:
+/// - No Task.Delay: continuous generation with periodic yield
+/// - No per-event await: uses TryWrite directly
+/// - Batched timestamps: 1 DateTime.UtcNow per 10,000 events
+/// - Readonly record struct TradeSignal: no GC pressure
+/// - Huge batch sizes: 10,000 events per inner loop
+/// - Preallocated string references: Symbol/Exchange/Direction reused
+/// - Periodic throughput logging
 /// </summary>
 public class MarketDataSimulator : BackgroundService
 {
     private readonly ILogger<MarketDataSimulator> _logger;
     private readonly TradeQueueProcessor _queueProcessor;
+    private readonly GenerationStats _generationStats;
     private static readonly Random _rng = new();
     private long _sequenceId = 0;
+
+    // Preallocated string references to avoid allocations
+    private const string Buy = "BUY";
+    private const string Sell = "SELL";
 
     private static readonly (string Symbol, decimal BasePrice, string Exchange)[] Instruments =
     [
@@ -36,101 +51,89 @@ public class MarketDataSimulator : BackgroundService
 
     private readonly decimal[] _currentPrices;
 
-    // Event clustering: Hawkes process-like state
-    private double _intensity = 1.0;
+    // Event clustering state kept for realistic behavior
+    private double _intensity = 5.0;
     private int _sameSideStreak = 0;
     private string? _lastDirection;
 
-    // Box-Muller transform for Gaussian random numbers
-    private double NextGaussian()
-    {
-        // Use polar form of Box-Muller transform
-        double u1 = 1.0 - _rng.NextDouble();
-        double u2 = 1.0 - _rng.NextDouble();
-        double randStdNormal = Math.Sqrt(-2.0 * Math.Log(u1)) * Math.Sin(2.0 * Math.PI * u2);
-        return randStdNormal;
-    }
-
-    public MarketDataSimulator(ILogger<MarketDataSimulator> logger, TradeQueueProcessor queueProcessor)
+    public MarketDataSimulator(ILogger<MarketDataSimulator> logger, TradeQueueProcessor queueProcessor, GenerationStats generationStats)
     {
         _logger = logger;
         _queueProcessor = queueProcessor;
+        _generationStats = generationStats;
         _currentPrices = Instruments.Select(i => i.BasePrice).ToArray();
-    }
-
-    // Event clustering: Hawkes-like delay calculation with bursty periods
-    private int GetEventClusterDelay()
-    {
-        // Probability of being in burst mode based on current intensity
-        var isInBurst = _rng.NextDouble() < Math.Min(_intensity / 5.0, 0.3);
-
-        if (isInBurst)
-        {
-            // Burst mode: very short delays (0-5ms), higher intensity
-            _intensity = Math.Min(_intensity * 1.5, 10.0);
-            return _rng.Next(0, 5);
-        }
-
-        // Quiet mode: longer delays, intensity decays
-        _intensity = Math.Max(_intensity * 0.9, 0.5);
-
-        // Occasional random bursts (news events, volatility spikes)
-        if (_rng.NextDouble() < 0.05)
-        {
-            _intensity = 8.0; // Sudden spike in activity
-            return _rng.Next(1, 10);
-        }
-
-        // Normal operation: exponential-like distribution
-        // Most delays are short, occasional long pauses
-        var delay = (int)Math.Round(-Math.Log(_rng.NextDouble()) * 50);
-        return Math.Clamp(delay, 5, 300);
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("MarketDataSimulator started - generating {Count} instruments", Instruments.Length);
+        _logger.LogInformation("MarketDataSimulator started - HIGH THROUGHPUT MODE targeting 1M+ events/sec, {Count} instruments", Instruments.Length);
+
+        // Prefer direct writer access instead of reflection. Use internal writer when available.
+        var writer = _queueProcessor.Writer; // internal ChannelWriter<TradeSignal>
+
+        var throughputTimer = Stopwatch.StartNew();
+        var lastLogTime = Stopwatch.GetTimestamp();
+        long lastLoggedCount = 0;
 
         while (!stoppingToken.IsCancellationRequested)
         {
-            // Hawkes-like burst sizing: intensity affects event count
-            var burstSize = Math.Max(1, (int)(NextGaussian() * 3 + 5 * _intensity));
-            burstSize = Math.Clamp(burstSize, 1, 30);
+            // Batch timestamp: 1 call per batch instead of per event
+            var batchTimestamp = DateTime.UtcNow;
 
-            for (int i = 0; i < burstSize; i++)
+            // Hawkes-like: Vary batch size based on intensity!
+            var burstSize = (int)(5000 + (_intensity * 5000)); // 5k to 55k events per burst
+            burstSize = Math.Clamp(burstSize, 2000, 60000);
+
+            // Random spikes to simulate news events!
+            if (_rng.NextDouble() < 0.02)
+            {
+                _intensity = 10.0; // Max intensity for a big burst!
+                burstSize = 100000; // Super-sized burst!
+            }
+
+            // Update intensity
+            if (_rng.NextDouble() < 0.1)
+            {
+                _intensity = Math.Max(0.5, _intensity * 0.7); // Decay
+            }
+            else
+            {
+                _intensity = Math.Min(10.0, _intensity * 1.05); // Grow
+            }
+
+            for (int batchIdx = 0; batchIdx < burstSize; batchIdx++)
             {
                 var idx = _rng.Next(Instruments.Length);
                 var (symbol, basePrice, exchange) = Instruments[idx];
 
-                var reversion = (basePrice - _currentPrices[idx]) * 0.02m;
-                var noise = (decimal)(_rng.NextDouble() - 0.5) * basePrice * 0.001m;
-                _currentPrices[idx] = Math.Clamp(_currentPrices[idx] + reversion + noise, basePrice * 0.92m, basePrice * 1.08m);
-                var price = Math.Round(_currentPrices[idx], 2);
+                // Fast price update
+                var reversion = (basePrice - _currentPrices[idx]) * 0.005m;
+                var noise = (decimal)(_rng.NextDouble() - 0.5) * basePrice * 0.0005m;
+                _currentPrices[idx] = Math.Clamp(_currentPrices[idx] + reversion + noise, basePrice * 0.95m, basePrice * 1.05m);
+                var price = _currentPrices[idx];
 
-                // Direction with autocorrelation: same-side streaks during momentum
+                // Fast direction selection
                 string direction;
-                if (_lastDirection != null && _sameSideStreak > 0 && _rng.NextDouble() < 0.7)
+                if (_lastDirection != null && _sameSideStreak > 0 && _rng.NextDouble() < 0.6)
                 {
                     direction = _lastDirection;
                     _sameSideStreak++;
                 }
                 else
                 {
-                    direction = _rng.NextDouble() > 0.5 ? "BUY" : "SELL";
+                    direction = _rng.NextDouble() > 0.5 ? Buy : Sell;
                     _lastDirection = direction;
-                    _sameSideStreak = _rng.Next(1, 5); // Start a new streak
+                    _sameSideStreak = _rng.Next(1, 8);
                 }
 
-                // Spread: bid/ask prices with realistic spread (typically 0.01-0.05% of price)
-                var spread = _currentPrices[idx] * (decimal)(_rng.NextDouble() * 0.0002 + 0.0001);
-                var bidPrice = Math.Round(price - spread / 2, 2);
-                var askPrice = Math.Round(price + spread / 2, 2);
-                var midPrice = Math.Round((bidPrice + askPrice) / 2, 2);
-
-                // Trades execute at bid or ask depending on direction
-                var tradePrice = direction == "BUY" ? askPrice : bidPrice;
-                var change = Math.Round(tradePrice - Instruments[idx].BasePrice, 2);
-                var changePct = Math.Round((double)(change / Instruments[idx].BasePrice * 100), 3);
+                // Simplified spread calculation (faster)
+                var spread = price * 0.00015m;
+                var bidPrice = price - spread;
+                var askPrice = price + spread;
+                var midPrice = price;
+                var tradePrice = direction == Buy ? askPrice : bidPrice;
+                var change = tradePrice - basePrice;
+                var changePct = (double)(change / basePrice * 100);
 
                 var signal = new TradeSignal(
                     Symbol: symbol,
@@ -141,17 +144,50 @@ public class MarketDataSimulator : BackgroundService
                     ChangePercent: changePct,
                     Volume: _rng.NextInt64(100, 50000),
                     Exchange: exchange,
-                    Timestamp: DateTime.UtcNow,
+                    Timestamp: batchTimestamp,
                     Direction: direction,
                     SequenceId: Interlocked.Increment(ref _sequenceId)
                 );
 
-                await _queueProcessor.EnqueueAsync(signal, stoppingToken);
+                // Fast enqueue - no await when writer accepts the signal
+                if (!writer.TryWrite(signal))
+                {
+                    await _queueProcessor.EnqueueAsync(signal, stoppingToken);
+                }
+
+                _generationStats.Increment();
             }
 
-            // Event clustering: Hawkes-like timing with bursts and pauses
-            var delay = GetEventClusterDelay();
-            await Task.Delay(delay, stoppingToken);
+            // Get current stats to check total generated
+            var (totalGenerated, _) = _generationStats.GetSnapshot();
+
+            // Periodically yield to let the consumer catch up and log throughput
+            if (totalGenerated % 100000 < 10000)
+            {
+                await Task.Yield();
+
+                // Log throughput every second
+                var elapsed = Stopwatch.GetElapsedTime(lastLogTime);
+                if (elapsed.TotalSeconds >= 1.0)
+                {
+                    var (currentTotal, currentRate) = _generationStats.GetSnapshot();
+                    var eventDelta = currentTotal - lastLoggedCount;
+                    var rate = eventDelta / elapsed.TotalSeconds;
+                    _generationStats.UpdateRate(currentTotal, Stopwatch.GetTimestamp(), rate);
+                    _logger.LogInformation("Throughput: {Rate:N0} events/sec, Total: {Total:N0}", rate, currentTotal);
+                    lastLogTime = Stopwatch.GetTimestamp();
+                    lastLoggedCount = currentTotal;
+                }
+            }
+
+            // Occasionally decay intensity
+            if (_rng.NextDouble() < 0.01)
+                _intensity = Math.Max(_intensity * 0.9, 2.0);
         }
+
+        throughputTimer.Stop();
+        var (finalTotal, _) = _generationStats.GetSnapshot();
+        var totalRate = finalTotal / throughputTimer.Elapsed.TotalSeconds;
+        _logger.LogInformation("MarketDataSimulator stopped - Total: {Total:N0}, Avg: {Rate:N0} events/sec", finalTotal, totalRate);
     }
 }

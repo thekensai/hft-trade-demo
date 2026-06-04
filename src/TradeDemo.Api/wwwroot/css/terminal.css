@@ -114,6 +114,7 @@ body {
     border-radius: 3px;
     font-size: 11px;
     color: var(--cyan);
+    font-variant-numeric: tabular-nums; /* Fixed-width digits! */
 }
 
 .clock {
@@ -197,6 +198,12 @@ body {
     display: flex;
     justify-content: space-between;
     align-items: center;
+}
+
+.feed-count-label {
+    color: var(--text-muted);
+    font-size: 9px;
+    margin-right: 0px;
 }
 
 .feed-count {
@@ -285,7 +292,7 @@ body {
 
 .signal-row {
     display: grid;
-    grid-template-columns: 50px 55px 65px 85px 45px 40px;
+    grid-template-columns: 84px 50px 62px 80px 42px 38px;
     gap: 4px;
     padding: 3px 6px;
     border-radius: 2px;
@@ -467,4 +474,8 @@ body {
 ::-webkit-scrollbar-thumb {
     background: var(--border);
     border-radius: 2px;
+}
+
+span#queueDepthBadge {
+    min-width: 90px;
 }

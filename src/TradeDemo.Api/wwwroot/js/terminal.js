@@ -12,7 +12,10 @@ const state = {
     maxFeedRows: 60,
     maxPendingSignals: 2500,
     renderBatchSize: 140,
+    feedRenderIntervalMs: 500, // Update every 0.5s instead of too fast
+    maxFeedRowsPerRender: 2, // Only 2 new rows per update
     pendingSignals: [],
+    pendingFeedRows: [], // Store pending feed rows
     renderScheduled: false,
     uiRefreshPaused: false,
     tickerDirty: false,
@@ -22,6 +25,7 @@ const state = {
     rateHistory: [],
     rateHistoryStartedAt: Date.now(),
     maxRateHistorySeconds: 60,
+    lastServerRate: 0,
 };
 
 // ── DOM refs ──
@@ -41,6 +45,12 @@ const dom = {
     statDropped: document.getElementById("statDropped"),
     statQueueDepth: document.getElementById("statQueueDepth"),
     statMsgSec: document.getElementById("statMsgSec"),
+    statServerRate: document.getElementById("statServerRate"),
+    statServerTotal: document.getElementById("statServerTotal"),
+    statCpuUsage: document.getElementById("statCpuUsage"),
+    statMemoryUsage: document.getElementById("statMemoryUsage"),
+    statWorkingSet: document.getElementById("statWorkingSet"),
+    statThreadCount: document.getElementById("statThreadCount"),
     rateGraph: document.getElementById("rateGraph"),
     rateTimeAxis: document.getElementById("rateTimeAxis"),
 };
@@ -162,13 +172,6 @@ setInterval(() => {
     dom.statMsgSec.textContent = state.msgPerSec.toLocaleString();
     state.msgCount = 0;
     state.lastMsgCountReset = Date.now();
-
-    const elapsedSeconds = Math.floor((Date.now() - state.rateHistoryStartedAt) / 1000);
-    state.rateHistory.push({ elapsedSeconds, rate: state.msgPerSec });
-    while (state.rateHistory.length > state.maxRateHistorySeconds) {
-        state.rateHistory.shift();
-    }
-    drawRateGraph();
 }, 1000);
 
 // ── SignalR Connection ──
@@ -199,11 +202,49 @@ connection.on("TradeSignal", (signal) => {
     enqueueSignal(signal);
 });
 
+connection.on("TradeSignals", (signals) => {
+    if (!signals || !Array.isArray(signals)) return;
+    for (const signal of signals) {
+        enqueueSignal(signal);
+    }
+});
+
+let lastStatsTime = null;
 connection.on("Stats", (stats) => {
+    const now = Date.now();
+
     dom.statProcessed.textContent = Number(stats.processedTotal).toLocaleString();
     dom.statDropped.textContent = Number(stats.droppedTotal).toLocaleString();
     dom.statQueueDepth.textContent = Number(stats.queueDepth).toLocaleString();
     dom.queueDepthBadge.textContent = `Q: ${stats.queueDepth}`;
+
+    // Check both camelCase and PascalCase just in case
+    const serverRateVal = stats.serverGenerationRatePerSec ?? stats.ServerGenerationRatePerSec;
+    const serverTotalVal = stats.serverGeneratedTotal ?? stats.ServerGeneratedTotal;
+
+    if (serverRateVal != null) {
+        const serverRate = Math.round(Number(serverRateVal));
+        dom.statServerRate.textContent = serverRate.toLocaleString();
+        state.lastServerRate = serverRate;
+
+        // Reset time tracking when we first start receiving stats
+        if (lastStatsTime === null) {
+            state.rateHistoryStartedAt = now;
+            state.rateHistory = [];
+        }
+        lastStatsTime = now;
+
+        // Add server rate to history for the graph
+        const elapsedSeconds = Math.floor((now - state.rateHistoryStartedAt) / 1000);
+        state.rateHistory.push({ elapsedSeconds, rate: serverRate });
+        while (state.rateHistory.length > state.maxRateHistorySeconds) {
+            state.rateHistory.shift();
+        }
+        drawRateGraph();
+    }
+    if (serverTotalVal != null) {
+        dom.statServerTotal.textContent = Number(serverTotalVal).toLocaleString();
+    }
 });
 
 function enqueueSignal(signal) {
@@ -260,7 +301,10 @@ function drainSignals() {
         state.tickerData.set(signal.symbol, signal);
     });
 
-    for (let i = feedSlice.length - 1; i >= 0; i--) {
+    // Only insert a small number of new feed rows per UI render to avoid flashing.
+    const maxRows = state.maxFeedRowsPerRender || 2;
+    const startIdx = Math.max(0, feedSlice.length - maxRows);
+    for (let i = feedSlice.length - 1; i >= startIdx; i--) {
         addSignalRow(feedSlice[i]);
     }
 
@@ -528,3 +572,33 @@ async function forceReconnect(reason) {
 }
 
 start();
+
+// ── System Metrics ──
+const updateSystemMetrics = async () => {
+    try {
+        const response = await fetch("/api/system/metrics");
+        const metrics = await response.json();
+
+        // Update CPU usage
+        const cpuUsage = Math.round(metrics.cpuUsagePercent * 100) / 100;
+        dom.statCpuUsage.textContent = `${cpuUsage}%`;
+        dom.statCpuUsage.className = `stat-value ${cpuUsage > 80 ? "stat-warn" : cpuUsage > 50 ? "stat-warning" : ""}`;
+
+        // Update memory usage (MB)
+        const memoryMb = Math.round(metrics.memoryUsageBytes / 1024 / 1024);
+        dom.statMemoryUsage.textContent = `${memoryMb.toLocaleString()} MB`;
+
+        // Update working set (MB)
+        const workingSetMb = Math.round(metrics.workingSetBytes / 1024 / 1024);
+        dom.statWorkingSet.textContent = `${workingSetMb.toLocaleString()} MB`;
+
+        // Update thread count
+        dom.statThreadCount.textContent = metrics.threadCount;
+    } catch (err) {
+        console.warn("Failed to fetch system metrics:", err);
+    }
+};
+
+// Update system metrics every second
+setInterval(updateSystemMetrics, 1000);
+updateSystemMetrics(); // Initial update

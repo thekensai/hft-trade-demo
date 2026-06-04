@@ -4,8 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Trade Signal Terminal</title>
-    <link rel="stylesheet" href="css/shared.css?v=20260529143516">
-    <link rel="stylesheet" href="css/terminal.css?v=20260529143516">
+    <link rel="stylesheet" href="css/shared.css?v=20260604073000">
+    <link rel="stylesheet" href="css/terminal.css?v=20260604073000">
 </head>
 <body>
     <nav class="site-nav">
@@ -49,14 +49,14 @@
             <section class="panel signal-feed-panel">
                 <div class="panel-title">
                     SIGNAL FEED
-                    <span class="feed-count" id="feedCount">0</span>
+                    <span class="feed-count-label">Feed Count:</span> <span class="feed-count" id="feedCount">0</span>
                 </div>
                 <div class="signal-feed" id="signalFeed"></div>
             </section>
 
             <!-- Order Flow Heatmap -->
             <section class="panel order-flow-panel">
-                <div class="panel-title">ORDER FLOW</div>
+                <div class="panel-title">Top 8 ORDER FLOW</div>
                 <div class="order-flow" id="orderFlow"></div>
             </section>
 
@@ -80,6 +80,37 @@
                         <div class="stat-label">MSG/SEC (CLIENT)</div>
                         <div class="stat-value" id="statMsgSec">0</div>
                     </div>
+                    <div class="stat-item">
+                        <div class="stat-label">GENERATED/SEC (SERVER)</div>
+                        <div class="stat-value stat-warn" id="statServerRate">0</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">TOTAL GENERATED</div>
+                        <div class="stat-value" id="statServerTotal">0</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- System Metrics Panel -->
+            <section class="panel stats-panel">
+                <div class="panel-title">SYSTEM METRICS</div>
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <div class="stat-label">CPU USAGE</div>
+                        <div class="stat-value" id="statCpuUsage">0%</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">MEMORY</div>
+                        <div class="stat-value" id="statMemoryUsage">0 MB</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">WORKING SET</div>
+                        <div class="stat-value" id="statWorkingSet">0 MB</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">THREADS</div>
+                        <div class="stat-value" id="statThreadCount">0</div>
+                    </div>
                 </div>
             </section>
 
@@ -93,6 +124,6 @@
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
-    <script src="js/terminal.js?v=20260529143516"></script>
+    <script src="js/terminal.js?v=20260604074500"></script>
 </body>
 </html>

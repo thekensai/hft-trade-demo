@@ -31,6 +31,7 @@ public class TradeQueueProcessor : BackgroundService
     private readonly IHubContext<TradeHub> _hubContext;
     private readonly ILogger<TradeQueueProcessor> _logger;
     private readonly PerformanceMetrics _metrics;
+    private readonly GenerationStats? _generationStats;
     private long _processedCount;
     private long _droppedCount;
 
@@ -38,15 +39,20 @@ public class TradeQueueProcessor : BackgroundService
     public long DroppedCount => Interlocked.Read(ref _droppedCount);
     public int QueueDepth => _channel.Reader.Count;
 
-    public TradeQueueProcessor(IHubContext<TradeHub> hubContext, ILogger<TradeQueueProcessor> logger, PerformanceMetrics metrics)
+    // Expose the channel writer for high-performance producers in the same assembly
+    // (keeps the channel itself private while allowing TryWrite without reflection)
+    internal ChannelWriter<TradeSignal> Writer => _channel.Writer;
+
+    public TradeQueueProcessor(IHubContext<TradeHub> hubContext, ILogger<TradeQueueProcessor> logger, PerformanceMetrics metrics, GenerationStats? generationStats = null)
     {
         _hubContext = hubContext;
         _logger = logger;
         _metrics = metrics;
-        // Bounded channel simulates Service Bus queue with backpressure
+        _generationStats = generationStats;
+        // Larger channel for 1M+ events/sec throughput
         // SingleWriter=false allows multiple producer threads (market feeds)
         // DropOldest ensures newest data is always available (stale quotes are worthless)
-        _channel = Channel.CreateBounded<TradeSignal>(new BoundedChannelOptions(10_000)
+        _channel = Channel.CreateBounded<TradeSignal>(new BoundedChannelOptions(100_000)
         {
             FullMode = BoundedChannelFullMode.DropOldest,
             SingleReader = true,   // single consumer loop for ordering guarantees
@@ -82,13 +88,12 @@ public class TradeQueueProcessor : BackgroundService
                 batch.Add(extra);
             }
 
-            // Fan out to SignalR clients
-            foreach (var item in batch)
-            {
-                await _hubContext.Clients.All.SendAsync("TradeSignal", item, stoppingToken);
-                await _hubContext.Clients.Group(item.Symbol).SendAsync("SymbolUpdate", item, stoppingToken);
-                Interlocked.Increment(ref _processedCount);
-            }
+            // Batch SignalR sends instead of per-item sends
+            // Send batched "TradeSignals" to all clients (primary broadcast)
+            await _hubContext.Clients.All.SendAsync("TradeSignals", batch, stoppingToken);
+
+            // Increment counter for all processed items
+            Interlocked.Add(ref _processedCount, batch.Count);
 
             // Record batch processing latency
             var batchLatency = Stopwatch.GetTimestamp() - batchStart;
@@ -96,13 +101,22 @@ public class TradeQueueProcessor : BackgroundService
             _metrics.RecordBytes(batch.Count * 128); // approximate serialized size
 
             // Send throughput stats every 500 messages
-            if (_processedCount % 500 == 0)
+            if (_processedCount % 500 < batch.Count)
             {
+                long totalGenerated = 0;
+                double generationRate = 0;
+                if (_generationStats != null)
+                {
+                    (totalGenerated, generationRate) = _generationStats.GetSnapshot();
+                }
+
                 await _hubContext.Clients.All.SendAsync("Stats", new
                 {
                     ProcessedTotal = _processedCount,
                     DroppedTotal = _droppedCount,
                     QueueDepth = _channel.Reader.Count,
+                    ServerGeneratedTotal = totalGenerated,
+                    ServerGenerationRatePerSec = generationRate,
                     Timestamp = DateTime.UtcNow
                 }, stoppingToken);
             }

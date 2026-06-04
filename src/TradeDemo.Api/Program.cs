@@ -13,6 +13,7 @@ builder.Services.AddCors(options =>
 });
 
 builder.Services.AddSingleton<PerformanceMetrics>();
+builder.Services.AddSingleton<GenerationStats>();
 builder.Services.AddSingleton<MarketDataSimulator>();
 builder.Services.AddSingleton<TradeQueueProcessor>();
 builder.Services.AddSingleton<ReplayEngine>();
@@ -52,6 +53,8 @@ app.MapGet("/api/queue/stats", (TradeQueueProcessor processor) => Results.Ok(new
     queueDepth = processor.QueueDepth,
     timestamp = DateTime.UtcNow
 }));
+
+app.MapGet("/api/system/metrics", (PerformanceMetrics metrics) => Results.Ok(metrics.GetSnapshot()));
 
 // ── Replay Engine Endpoints ──
 

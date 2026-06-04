@@ -1,6 +1,7 @@
 namespace TradeDemo.Api.Models;
 
-public record TradeSignal(
+// Changed to readonly record struct, Eliminates GC pressure from heap allocations
+public readonly record struct TradeSignal(
     string Symbol,
     decimal BidPrice,
     decimal AskPrice,

@@ -160,7 +160,7 @@ public class ReplayEngine
                     );
 
                     var enqueueSw = Stopwatch.StartNew();
-                    _queueProcessor.EnqueueAsync(signal);
+                    _ = _queueProcessor.EnqueueAsync(signal); // Fire-and-forget; metrics recorded immediately
                     _metrics.RecordLatency(enqueueSw.ElapsedTicks);
 
                     messagesSent++;
