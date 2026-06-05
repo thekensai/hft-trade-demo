@@ -11,11 +11,18 @@ const state = {
     msgPerSec: 0,
     maxFeedRows: 60,
     maxPendingSignals: 2500,
+    maxPendingFeedRows: 250,
     renderBatchSize: 140,
-    feedRenderIntervalMs: 500, // Update every 0.5s instead of too fast
-    maxFeedRowsPerRender: 2, // Only 2 new rows per update
+    priceRenderIntervalMs: 1500,
+    feedRenderIntervalMs: 1200,
+    maxFeedRowsPerRender: 1,
     pendingSignals: [],
-    pendingFeedRows: [], // Store pending feed rows
+    pendingPriceUpdates: new Map(),
+    pendingFeedRows: [],
+    priceRenderTimer: null,
+    feedRenderTimer: null,
+    lastPriceRenderAt: 0,
+    lastFeedRenderAt: 0,
     renderScheduled: false,
     uiRefreshPaused: false,
     tickerDirty: false,
@@ -70,6 +77,8 @@ dom.pauseResumeButton.addEventListener("click", () => {
 
     if (!state.uiRefreshPaused) {
         scheduleRender();
+        schedulePriceRender();
+        scheduleFeedRender();
     }
 });
 
@@ -276,7 +285,6 @@ function drainSignals() {
     }
 
     const latestBySymbol = new Map();
-    const feedSlice = [];
 
     let processed = 0;
     while (state.pendingSignals.length > 0 && processed < state.renderBatchSize) {
@@ -288,29 +296,19 @@ function drainSignals() {
 
         latestBySymbol.set(signal.symbol, signal);
         accumulateOrderFlow(signal);
-
-        // Keep only latest rows for feed insertion this frame.
-        feedSlice.push(signal);
-        if (feedSlice.length > 24) {
-            feedSlice.shift();
-        }
+        enqueueFeedRow(signal);
     }
 
     latestBySymbol.forEach((signal) => {
-        updatePriceGrid(signal);
+        queuePriceUpdate(signal);
         state.tickerData.set(signal.symbol, signal);
     });
 
-    // Only insert a small number of new feed rows per UI render to avoid flashing.
-    const maxRows = state.maxFeedRowsPerRender || 2;
-    const startIdx = Math.max(0, feedSlice.length - maxRows);
-    for (let i = feedSlice.length - 1; i >= startIdx; i--) {
-        addSignalRow(feedSlice[i]);
-    }
+    schedulePriceRender();
+    scheduleFeedRender();
 
     renderOrderFlow();
 
-    dom.feedCount.textContent = state.signalCount.toLocaleString();
     state.tickerDirty = true;
 
     // If backlog remains, process on next animation frame without locking main thread.
@@ -320,6 +318,37 @@ function drainSignals() {
 }
 
 // ── Price Grid ──
+function queuePriceUpdate(signal) {
+    state.pendingPriceUpdates.set(signal.symbol, signal);
+}
+
+function schedulePriceRender() {
+    if (state.uiRefreshPaused || state.priceRenderTimer || state.pendingPriceUpdates.size === 0) {
+        return;
+    }
+
+    const elapsed = Date.now() - state.lastPriceRenderAt;
+    const delay = Math.max(0, state.priceRenderIntervalMs - elapsed);
+    state.priceRenderTimer = setTimeout(renderPriceGrid, delay);
+}
+
+function renderPriceGrid() {
+    state.priceRenderTimer = null;
+
+    if (state.uiRefreshPaused || state.pendingPriceUpdates.size === 0) {
+        return;
+    }
+
+    const updates = [...state.pendingPriceUpdates.values()];
+    state.pendingPriceUpdates.clear();
+
+    for (const signal of updates) {
+        updatePriceGrid(signal);
+    }
+
+    state.lastPriceRenderAt = Date.now();
+}
+
 function updatePriceGrid(signal) {
     let row = document.getElementById(`price-${signal.symbol}`);
     const isUp = signal.change >= 0;
@@ -354,14 +383,51 @@ function updatePriceGrid(signal) {
     changeEl.className = `price-change ${isUp ? "ticker-up" : "ticker-down"}`;
 
     // Lightweight flash without forcing synchronous layout.
-    row.classList.remove("flash-green", "flash-red");
-    queueMicrotask(() => row.classList.add(isUp ? "flash-green" : "flash-red"));
-    setTimeout(() => row.classList.remove("flash-green", "flash-red"), 120);
+    row.classList.toggle("flash-green", isUp);
+    row.classList.toggle("flash-red", !isUp);
 
     state.prices.set(signal.symbol, signal);
 }
 
 // ── Signal Feed ──
+function enqueueFeedRow(signal) {
+    state.pendingFeedRows.push(signal);
+
+    if (state.pendingFeedRows.length > state.maxPendingFeedRows) {
+        state.pendingFeedRows.splice(0, state.pendingFeedRows.length - state.maxPendingFeedRows);
+    }
+}
+
+function scheduleFeedRender() {
+    if (state.uiRefreshPaused || state.feedRenderTimer || state.pendingFeedRows.length === 0) {
+        return;
+    }
+
+    const elapsed = Date.now() - state.lastFeedRenderAt;
+    const delay = Math.max(0, state.feedRenderIntervalMs - elapsed);
+    state.feedRenderTimer = setTimeout(renderFeedRows, delay);
+}
+
+function renderFeedRows() {
+    state.feedRenderTimer = null;
+
+    if (state.uiRefreshPaused || state.pendingFeedRows.length === 0) {
+        return;
+    }
+
+    const maxRows = state.maxFeedRowsPerRender || 1;
+    const startIdx = Math.max(0, state.pendingFeedRows.length - maxRows);
+    const rows = state.pendingFeedRows.slice(startIdx).reverse();
+    state.pendingFeedRows.length = 0;
+
+    for (const signal of rows) {
+        addSignalRow(signal);
+    }
+
+    dom.feedCount.textContent = state.signalCount.toLocaleString();
+    state.lastFeedRenderAt = Date.now();
+}
+
 function addSignalRow(signal) {
     const row = document.createElement("div");
     const isBuy = signal.direction === "BUY";

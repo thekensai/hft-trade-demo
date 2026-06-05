@@ -216,7 +216,7 @@ body {
 
 /* Price Grid */
 .price-grid-panel {
-    grid-row: 2 / 5;
+    grid-row: 2 / 6;
 }
 
 .price-grid {
@@ -235,7 +235,7 @@ body {
     padding: 4px 8px;
     border-radius: 3px;
     background: var(--bg-secondary);
-    transition: background 0.15s;
+    transition: background 0.35s ease-out;
 }
 
 .price-row.flash-green {
@@ -278,7 +278,8 @@ body {
 
 /* Signal Feed */
 .signal-feed-panel {
-    grid-row: 2 / 5;
+    grid-row: 2 / 6;
+    grid-column: 2;
 }
 
 .signal-feed {
@@ -296,13 +297,7 @@ body {
     gap: 4px;
     padding: 3px 6px;
     border-radius: 2px;
-    animation: slide-in 0.1s ease-out;
     font-variant-numeric: tabular-nums;
-}
-
-@keyframes slide-in {
-    from { transform: translateY(-20px); opacity: 0; }
-    to { transform: translateY(0); opacity: 1; }
 }
 
 .signal-row.buy {
@@ -352,6 +347,7 @@ body {
 
 /* Order Flow */
 .order-flow-panel {
+    grid-column: 3;
     grid-row: 2;
 }
 
@@ -406,7 +402,8 @@ body {
 }
 
 /* Stats */
-.stats-panel {
+.throughput-panel {
+    grid-column: 3;
     grid-row: 3;
 }
 
@@ -420,8 +417,8 @@ body {
 
 /* Rate Graph Panel */
 .rate-graph-panel {
+    grid-column: 3;
     grid-row: 4;
-    position: relative;
 }
 
 #rateGraph {
@@ -460,6 +457,11 @@ body {
 
 .stat-value.stat-warn {
     color: var(--red);
+}
+
+.server-metrics-panel {
+    grid-column: 3;
+    grid-row: 5;
 }
 
 /* Scrollbar */
