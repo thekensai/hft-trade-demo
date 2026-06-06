@@ -50,7 +50,6 @@ const dom = {
     statProcessed: document.getElementById("statProcessed"),
     statDropped: document.getElementById("statDropped"),
     statQueueDepth: document.getElementById("statQueueDepth"),
-    statMsgSec: document.getElementById("statMsgSec"),
     statServerRate: document.getElementById("statServerRate"),
     statServerTotal: document.getElementById("statServerTotal"),
     statCpuUsage: document.getElementById("statCpuUsage"),
@@ -177,7 +176,6 @@ setInterval(() => {
     const elapsed = Math.max(0.001, (Date.now() - state.lastMsgCountReset) / 1000);
     state.msgPerSec = Math.round(state.msgCount / elapsed);
     dom.throughputBadge.textContent = `${state.msgPerSec} feeds/s`;
-    dom.statMsgSec.textContent = state.msgPerSec.toLocaleString();
     state.msgCount = 0;
     state.lastMsgCountReset = Date.now();
 }, 1000);

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Trade Signal Terminal</title>
     <link rel="stylesheet" href="css/shared.css?v=20260605025510">
-    <link rel="stylesheet" href="css/terminal.css?v=20260606010000">
+    <link rel="stylesheet" href="css/terminal.css?v=20260606011500">
 </head>
 <body>
     <nav class="site-nav">
@@ -63,7 +63,7 @@
 
             <!-- Stats Panel -->
             <section class="panel throughput-panel">
-                <div class="panel-title">SERVER THROUGHPUT STATS</div>
+                <div class="panel-title">SERVER METRICS</div>
                 <div class="stats-grid">
                     <div class="stat-item">
                         <div class="stat-label">PROCESSED</div>
@@ -78,24 +78,13 @@
                         <div class="stat-value" id="statQueueDepth">0</div>
                     </div>
                     <div class="stat-item">
-                        <div class="stat-label">MSG/SEC (CLIENT)</div>
-                        <div class="stat-value" id="statMsgSec">0</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-label">GENERATED/SEC (SERVER)</div>
+                        <div class="stat-label">EVENT RATE / SEC</div>
                         <div class="stat-value stat-warn" id="statServerRate">0</div>
                     </div>
                     <div class="stat-item">
-                        <div class="stat-label">TOTAL GENERATED</div>
+                        <div class="stat-label">EVENT COUNT</div>
                         <div class="stat-value" id="statServerTotal">0</div>
                     </div>
-                </div>
-            </section>
-
-            <!-- System Metrics Panel -->
-            <section class="panel server-metrics-panel">
-                <div class="panel-title">SERVER METRICS</div>
-                <div class="stats-grid">
                     <div class="stat-item">
                         <div class="stat-label">CPU USAGE</div>
                         <div class="stat-value" id="statCpuUsage">0%</div>
@@ -125,6 +114,6 @@
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
-    <script src="js/terminal.js?v=20260606010500"></script>
+    <script src="js/terminal.js?v=20260606011000"></script>
 </body>
 </html>
