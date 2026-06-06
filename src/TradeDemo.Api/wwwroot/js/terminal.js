@@ -40,7 +40,6 @@ const dom = {
     connectionDot: document.getElementById("connectionDot"),
     connectionStatus: document.getElementById("connectionStatus"),
     throughputBadge: document.getElementById("throughputBadge"),
-    queueDepthBadge: document.getElementById("queueDepthBadge"),
     clock: document.getElementById("clock"),
     pauseResumeButton: document.getElementById("pauseResumeButton"),
     tickerTape: document.getElementById("tickerTape"),
@@ -177,7 +176,7 @@ window.addEventListener("resize", drawRateGraph);
 setInterval(() => {
     const elapsed = Math.max(0.001, (Date.now() - state.lastMsgCountReset) / 1000);
     state.msgPerSec = Math.round(state.msgCount / elapsed);
-    dom.throughputBadge.textContent = `${state.msgPerSec} msg/s`;
+    dom.throughputBadge.textContent = `${state.msgPerSec} feeds/s`;
     dom.statMsgSec.textContent = state.msgPerSec.toLocaleString();
     state.msgCount = 0;
     state.lastMsgCountReset = Date.now();
@@ -225,7 +224,6 @@ connection.on("Stats", (stats) => {
     dom.statProcessed.textContent = Number(stats.processedTotal).toLocaleString();
     dom.statDropped.textContent = Number(stats.droppedTotal).toLocaleString();
     dom.statQueueDepth.textContent = Number(stats.queueDepth).toLocaleString();
-    dom.queueDepthBadge.textContent = `Q: ${stats.queueDepth}`;
 
     // Check both camelCase and PascalCase just in case
     const serverRateVal = stats.serverGenerationRatePerSec ?? stats.ServerGenerationRatePerSec;
@@ -532,7 +530,7 @@ setInterval(() => {
 
     const ageMs = Date.now() - state.lastSignalAt;
     if (ageMs > 5000 && connection.state !== signalR.HubConnectionState.Connected) {
-        forceReconnect("stale-watchdog");
+        forceReconnect("reconnecting...");
     }
 }, 2000);
 
@@ -593,7 +591,7 @@ async function start(force = false) {
 async function ensureHotResume() {
     const ageMs = Date.now() - state.lastSignalAt;
     if (connection.state !== signalR.HubConnectionState.Connected || ageMs > 2500) {
-        await forceReconnect("visibility-resume");
+        await forceReconnect("reconnecting..");
     }
 }
 

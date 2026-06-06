@@ -203,7 +203,13 @@ body {
 .feed-count-label {
     color: var(--text-muted);
     font-size: 9px;
-    margin-right: 0px;
+    margin-right: 6px;
+}
+
+.feed-count-group {
+    display: flex;
+    align-items: center;
+    gap: 10px;
 }
 
 .feed-count {
@@ -230,9 +236,10 @@ body {
 
 .price-row {
     display: grid;
-    grid-template-columns: 70px 120px 90px 80px 60px;
+    grid-template-columns: 60px 1fr 80px 70px 70px;
+    gap: 8px;
     align-items: center;
-    padding: 4px 8px;
+    padding: 4px 12px 4px 8px;
     border-radius: 3px;
     background: var(--bg-secondary);
     transition: background 0.35s ease-out;

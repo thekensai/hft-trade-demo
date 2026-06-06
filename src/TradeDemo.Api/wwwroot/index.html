@@ -4,8 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Trade Signal Terminal</title>
-    <link rel="stylesheet" href="css/shared.css?v=20260604073000">
-    <link rel="stylesheet" href="css/terminal.css?v=20260604073000">
+    <link rel="stylesheet" href="css/shared.css?v=20260605025510">
+    <link rel="stylesheet" href="css/terminal.css?v=20260606010000">
 </head>
 <body>
     <nav class="site-nav">
@@ -16,7 +16,6 @@
         <a href="/concurrency.html" class="nav-link">Concurrency</a>
         <a href="/replay.html" class="nav-link">Replay Engine</a>
         <span class="nav-spacer"></span>
-        <span class="nav-badge">.NET 8 · SignalR · Channels&lt;T&gt;</span>
     </nav>
     <div class="terminal-container">
         <header class="terminal-header">
@@ -27,8 +26,6 @@
             </div>
             <div class="header-right">
                 <button class="pause-resume-button" id="pauseResumeButton" type="button">Pause</button>
-                <span class="stat-badge" id="throughputBadge">0 msg/s</span>
-                <span class="stat-badge" id="queueDepthBadge">Q: 0</span>
                 <span class="clock" id="clock">00:00:00.000</span>
             </div>
         </header>
@@ -49,7 +46,11 @@
             <section class="panel signal-feed-panel">
                 <div class="panel-title">
                     SIGNAL FEED
-                    <span class="feed-count-label">Feed Count:</span> <span class="feed-count" id="feedCount">0</span>
+                    <span class="feed-count-group">
+                        <span class="feed-count-label">Feed Count:</span>
+                        <span class="feed-count" id="feedCount">0</span>
+                        <span class="stat-badge" id="throughputBadge">0 feeds/s</span>
+                    </span>
                 </div>
                 <div class="signal-feed" id="signalFeed"></div>
             </section>
@@ -62,7 +63,7 @@
 
             <!-- Stats Panel -->
             <section class="panel throughput-panel">
-                <div class="panel-title">THROUGHPUT STATS</div>
+                <div class="panel-title">SERVER THROUGHPUT STATS</div>
                 <div class="stats-grid">
                     <div class="stat-item">
                         <div class="stat-label">PROCESSED</div>
@@ -93,7 +94,7 @@
 
             <!-- System Metrics Panel -->
             <section class="panel server-metrics-panel">
-                <div class="panel-title">SYSTEM METRICS</div>
+                <div class="panel-title">SERVER METRICS</div>
                 <div class="stats-grid">
                     <div class="stat-item">
                         <div class="stat-label">CPU USAGE</div>
@@ -116,7 +117,7 @@
 
             <!-- Event Rate Graph -->
             <section class="panel rate-graph-panel">
-                <div class="panel-title">EVENT RATE (msg/s)</div>
+                <div class="panel-title">SERVER EVENT RATE (msg/s)</div>
                 <canvas id="rateGraph"></canvas>
                 <div class="rate-time-axis" id="rateTimeAxis"></div>
             </section>
@@ -124,6 +125,6 @@
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
-    <script src="js/terminal.js?v=20260605235000"></script>
+    <script src="js/terminal.js?v=20260606010500"></script>
 </body>
 </html>
