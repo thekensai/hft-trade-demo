@@ -68,8 +68,8 @@ public class MarketDataSimulator : BackgroundService
     {
         _logger.LogInformation("MarketDataSimulator started - HIGH THROUGHPUT MODE targeting 1M+ events/sec, {Count} instruments", Instruments.Length);
 
-        // Prefer direct writer access instead of reflection. Use internal writer when available.
-        var writer = _queueProcessor.Writer; // internal ChannelWriter<TradeSignal>
+        // Use TryEnqueue to ensure the channel's enqueue counter increments
+        // (required for accurate dropped-count accounting under DropOldest).
 
         var throughputTimer = Stopwatch.StartNew();
         var lastLogTime = Stopwatch.GetTimestamp();
@@ -149,11 +149,9 @@ public class MarketDataSimulator : BackgroundService
                     SequenceId: Interlocked.Increment(ref _sequenceId)
                 );
 
-                // Fast enqueue - no await when writer accepts the signal
-                if (!writer.TryWrite(signal))
-                {
-                    await _queueProcessor.EnqueueAsync(signal, stoppingToken);
-                }
+                // Fast enqueue — TryEnqueue handles the metric counter and never blocks
+                // (DropOldest mode means TryWrite always returns true)
+                _queueProcessor.TryEnqueue(signal);
 
                 _generationStats.Increment();
             }

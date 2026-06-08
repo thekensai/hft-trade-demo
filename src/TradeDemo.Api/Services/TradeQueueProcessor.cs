@@ -1,6 +1,4 @@
-using System.Buffers;
 using System.Diagnostics;
-using System.Text.Json;
 using System.Threading.Channels;
 using Microsoft.AspNetCore.SignalR;
 using TradeDemo.Api.Hubs;
@@ -10,38 +8,77 @@ namespace TradeDemo.Api.Services;
 
 /// <summary>
 /// High-performance queue processor demonstrating trading infrastructure patterns:
-/// 
-/// - Bounded Channel&lt;T&gt; (10K capacity) with DropOldest backpressure — mirrors
+///
+/// - Bounded Channel&lt;T&gt; (100K capacity) with DropOldest backpressure — mirrors
 ///   Service Bus queue semantics with competing consumers
-/// - Batch consumption (up to 50 items per drain) — reduces syscall overhead,
-///   similar to Service Bus PeekLock batch receive
+/// - Latest-state aggregation per symbol — the consumer drains the channel as fast
+///   as possible into a small per-symbol cache, then broadcasts a coalesced snapshot
+///   on a fixed cadence (~100ms). This matches how every real market-data UI scales:
+///   1.3M raw ticks/sec collapse to a few hundred symbols × 10 snapshots/sec, instead
+///   of trying to push every individual tick over the wire.
 /// - Interlocked counters for lock-free stats — no contention on hot path
-/// - ArrayPool&lt;byte&gt; for serialization buffers — zero-allocation broadcast
-/// - Stopwatch-based latency measurement on every message — feeds percentile tracker
-/// - IAsyncEnumerable consumption via ReadAllAsync — cooperative cancellation
-/// 
+/// - Stopwatch-based latency measurement per broadcast — feeds percentile tracker
+/// - Accurate dropped-count via enqueue/processed/depth accounting, since
+///   DropOldest silently makes room (TryWrite always returns true)
+///
 /// Threading model:
 ///   Producer threads → Channel.Writer.TryWrite (lock-free)
-///   Consumer thread  → single async loop with batch drain
+///   Consumer thread  → drain-then-snapshot loop on a fixed cadence
 ///   Stats broadcast  → periodic, piggybacks on consumer loop
 /// </summary>
 public class TradeQueueProcessor : BackgroundService
 {
+    private const int ChannelCapacity = 100_000;
+    private const int BroadcastIntervalMs = 33;         // ~30 snapshots/sec (monitor refresh rate)
+    private const int StatsIntervalMs = 500;            // ~2 stats updates/sec
+
     private readonly Channel<TradeSignal> _channel;
     private readonly IHubContext<TradeHub> _hubContext;
     private readonly ILogger<TradeQueueProcessor> _logger;
     private readonly PerformanceMetrics _metrics;
     private readonly GenerationStats? _generationStats;
-    private long _processedCount;
-    private long _droppedCount;
+
+    // Lock-free counters on the hot path
+    private long _enqueuedCount;     // total TryWrite attempts (incl. silently-dropped-by-DropOldest)
+    private long _processedCount;    // total raw signals drained from the channel
+    private long _broadcastCount;    // total snapshot broadcasts sent
+    private long _broadcastItemCount; // total unique symbols sent across all broadcasts
+    private long _coalescedCount;    // total signals coalesced (overwritten in cache)
 
     public long ProcessedCount => Interlocked.Read(ref _processedCount);
-    public long DroppedCount => Interlocked.Read(ref _droppedCount);
+    public long BroadcastCount => Interlocked.Read(ref _broadcastCount);
     public int QueueDepth => _channel.Reader.Count;
+
+    /// <summary>
+    /// Accurate dropped count, inferred from accounting:
+    /// dropped = enqueued − processed − currently-in-queue.
+    /// Channel.CreateBounded(DropOldest) silently discards items, so TryWrite
+    /// always returns true and can't be used to count drops directly.
+    /// </summary>
+    public long DroppedCount
+    {
+        get
+        {
+            var enqueued = Interlocked.Read(ref _enqueuedCount);
+            var processed = Interlocked.Read(ref _processedCount);
+            var depth = _channel.Reader.Count;
+            return Math.Max(0, enqueued - processed - depth);
+        }
+    }
 
     // Expose the channel writer for high-performance producers in the same assembly
     // (keeps the channel itself private while allowing TryWrite without reflection)
     internal ChannelWriter<TradeSignal> Writer => _channel.Writer;
+
+    /// <summary>
+    /// Fast enqueue path for high-throughput producers. Call this instead of Writer.TryWrite()
+    /// to ensure enqueue metrics are tracked correctly.
+    /// </summary>
+    public bool TryEnqueue(TradeSignal signal)
+    {
+        Interlocked.Increment(ref _enqueuedCount);
+        return _channel.Writer.TryWrite(signal);
+    }
 
     public TradeQueueProcessor(IHubContext<TradeHub> hubContext, ILogger<TradeQueueProcessor> logger, PerformanceMetrics metrics, GenerationStats? generationStats = null)
     {
@@ -49,79 +86,137 @@ public class TradeQueueProcessor : BackgroundService
         _logger = logger;
         _metrics = metrics;
         _generationStats = generationStats;
-        // Larger channel for 1M+ events/sec throughput
-        // SingleWriter=false allows multiple producer threads (market feeds)
-        // DropOldest ensures newest data is always available (stale quotes are worthless)
-        _channel = Channel.CreateBounded<TradeSignal>(new BoundedChannelOptions(100_000)
+        // Large channel for 1M+ events/sec — DropOldest preserves the freshest data
+        // under sustained backpressure (stale quotes are worthless for trading UIs).
+        // SingleWriter=false allows multiple producer threads (market feeds).
+        _channel = Channel.CreateBounded<TradeSignal>(new BoundedChannelOptions(ChannelCapacity)
         {
             FullMode = BoundedChannelFullMode.DropOldest,
-            SingleReader = true,   // single consumer loop for ordering guarantees
+            SingleReader = true,   // single consumer drain loop
             SingleWriter = false   // multiple producers (exchange feeds)
         });
     }
 
     public ValueTask EnqueueAsync(TradeSignal signal, CancellationToken ct = default)
     {
-        if (!_channel.Writer.TryWrite(signal))
-        {
-            Interlocked.Increment(ref _droppedCount);
-        }
+        Interlocked.Increment(ref _enqueuedCount);
+        // TryWrite returns true even when DropOldest silently makes room — drops
+        // are accounted for via DroppedCount, not via this return value.
+        _channel.Writer.TryWrite(signal);
         return ValueTask.CompletedTask;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("TradeQueueProcessor started - consuming from bounded channel (capacity=10K, batch=50)");
+        _logger.LogInformation(
+            "TradeQueueProcessor started — channel capacity={Capacity}, broadcast cadence={IntervalMs}ms (latest-per-symbol coalescing)",
+            ChannelCapacity, BroadcastIntervalMs);
 
-        // Pre-allocated batch buffer — no per-iteration allocation
-        var batch = new List<TradeSignal>(50);
+        // Latest-state cache: one entry per symbol, last writer wins.
+        // Cleared after each broadcast so each snapshot contains only changed symbols.
+        var latestBySymbol = new Dictionary<string, TradeSignal>(capacity: 64);
 
-        await foreach (var signal in _channel.Reader.ReadAllAsync(stoppingToken))
+        // Pre-allocated buffer for the snapshot payload, sized to a typical symbol universe.
+        // SignalR will serialize this directly — no per-batch allocation here.
+        var snapshot = new List<TradeSignal>(capacity: 64);
+
+        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(BroadcastIntervalMs));
+
+        var lastStatsAt = Stopwatch.GetTimestamp();
+        var statsIntervalTicks = Stopwatch.Frequency * StatsIntervalMs / 1000;
+        var broadcastsSinceLastStats = 0L;
+        var coalescedSinceLastStats = 0L;
+
+        try
         {
-            var batchStart = Stopwatch.GetTimestamp();
-
-            batch.Add(signal);
-
-            // Drain up to 50 items if available — amortizes send overhead
-            while (batch.Count < 50 && _channel.Reader.TryRead(out var extra))
+            while (await timer.WaitForNextTickAsync(stoppingToken))
             {
-                batch.Add(extra);
-            }
+                var tickStart = Stopwatch.GetTimestamp();
 
-            // Batch SignalR sends instead of per-item sends
-            // Send batched "TradeSignals" to all clients (primary broadcast)
-            await _hubContext.Clients.All.SendAsync("TradeSignals", batch, stoppingToken);
-
-            // Increment counter for all processed items
-            Interlocked.Add(ref _processedCount, batch.Count);
-
-            // Record batch processing latency
-            var batchLatency = Stopwatch.GetTimestamp() - batchStart;
-            _metrics.RecordLatency(batchLatency);
-            _metrics.RecordBytes(batch.Count * 128); // approximate serialized size
-
-            // Send throughput stats every 500 messages
-            if (_processedCount % 500 < batch.Count)
-            {
-                long totalGenerated = 0;
-                double generationRate = 0;
-                if (_generationStats != null)
+                // ── Drain phase: pull everything currently available, coalesce by symbol ──
+                var drained = 0;
+                while (_channel.Reader.TryRead(out var signal))
                 {
-                    (totalGenerated, generationRate) = _generationStats.GetSnapshot();
+                    latestBySymbol[signal.Symbol] = signal;
+                    drained++;
                 }
 
-                await _hubContext.Clients.All.SendAsync("Stats", new
+                if (drained > 0)
                 {
-                    ProcessedTotal = _processedCount,
-                    DroppedTotal = _droppedCount,
-                    QueueDepth = _channel.Reader.Count,
-                    ServerGeneratedTotal = totalGenerated,
-                    ServerGenerationRatePerSec = generationRate,
-                    Timestamp = DateTime.UtcNow
-                }, stoppingToken);
-            }
+                    Interlocked.Add(ref _processedCount, drained);
+                }
 
-            batch.Clear();
+                // ── Broadcast phase: send one coalesced snapshot per tick ──
+                if (latestBySymbol.Count > 0)
+                {
+                    snapshot.Clear();
+                    foreach (var entry in latestBySymbol.Values)
+                    {
+                        snapshot.Add(entry);
+                    }
+                    latestBySymbol.Clear();
+
+                    Interlocked.Add(ref _broadcastItemCount, snapshot.Count);
+                    Interlocked.Add(ref _coalescedCount, drained - snapshot.Count);
+                    coalescedSinceLastStats += drained - snapshot.Count;
+
+                    await _hubContext.Clients.All.SendAsync("TradeSignals", snapshot, stoppingToken);
+                    Interlocked.Increment(ref _broadcastCount);
+                    broadcastsSinceLastStats++;
+
+                    // Latency = time from tick-start to send-complete; bytes ≈ snapshot count × ~128B
+                    _metrics.RecordLatency(Stopwatch.GetTimestamp() - tickStart);
+                    _metrics.RecordBytes(snapshot.Count * 128);
+                }
+
+                // ── Stats broadcast: piggybacks on the consumer loop ──
+                if (Stopwatch.GetTimestamp() - lastStatsAt >= statsIntervalTicks)
+                {
+                    var now = Stopwatch.GetTimestamp();
+                    var elapsedSeconds = (double)(now - lastStatsAt) / Stopwatch.Frequency;
+                    var snapshotsPerSec = elapsedSeconds > 0
+                        ? broadcastsSinceLastStats / elapsedSeconds
+                        : 0;
+
+                    lastStatsAt = now;
+                    broadcastsSinceLastStats = 0;
+
+                    long totalGenerated = 0;
+                    double generationRate = 0;
+                    if (_generationStats != null)
+                    {
+                        (totalGenerated, generationRate) = _generationStats.GetSnapshot();
+                    }
+
+                    var processedTotal = Interlocked.Read(ref _processedCount);
+                    var coalescedTotal = Interlocked.Read(ref _coalescedCount);
+                    var coalescedPerSec = elapsedSeconds > 0
+                        ? coalescedSinceLastStats / elapsedSeconds
+                        : 0;
+
+                    await _hubContext.Clients.All.SendAsync("Stats", new
+                    {
+                        ProcessedTotal = processedTotal,
+                        DroppedTotal = DroppedCount,
+                        CoalescedTotal = coalescedTotal,
+                        CoalescedPerSec = coalescedPerSec,
+                        QueueDepth = _channel.Reader.Count,
+                        BroadcastTotal = Interlocked.Read(ref _broadcastCount),
+                        SnapshotsPerSec = snapshotsPerSec,
+                        ServerGeneratedTotal = totalGenerated,
+                        ServerGenerationRatePerSec = generationRate,
+                        Timestamp = DateTime.UtcNow
+                    }, stoppingToken);
+
+                    // Reset per-stats-window counters
+                    broadcastsSinceLastStats = 0;
+                    coalescedSinceLastStats = 0;
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Graceful shutdown — PeriodicTimer.WaitForNextTickAsync throws on cancellation.
         }
     }
 }

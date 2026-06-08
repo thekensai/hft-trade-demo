@@ -51,6 +51,8 @@ const dom = {
     statDropped: document.getElementById("statDropped"),
     statQueueDepth: document.getElementById("statQueueDepth"),
     statServerRate: document.getElementById("statServerRate"),
+    statSnapshotsPerSec: document.getElementById("statSnapshotsPerSec"),
+    statCoalescedPerSec: document.getElementById("statCoalescedPerSec"),
     statServerTotal: document.getElementById("statServerTotal"),
     statCpuUsage: document.getElementById("statCpuUsage"),
     statMemoryUsage: document.getElementById("statMemoryUsage"),
@@ -222,6 +224,16 @@ connection.on("Stats", (stats) => {
     dom.statProcessed.textContent = Number(stats.processedTotal).toLocaleString();
     dom.statDropped.textContent = Number(stats.droppedTotal).toLocaleString();
     dom.statQueueDepth.textContent = Number(stats.queueDepth).toLocaleString();
+
+    const snapshotsPerSecVal = stats.snapshotsPerSec ?? stats.SnapshotsPerSec;
+    if (snapshotsPerSecVal != null) {
+        dom.statSnapshotsPerSec.textContent = Math.round(Number(snapshotsPerSecVal)).toLocaleString();
+    }
+
+    const coalescedPerSecVal = stats.coalescedPerSec ?? stats.CoalescedPerSec;
+    if (coalescedPerSecVal != null) {
+        dom.statCoalescedPerSec.textContent = Math.round(Number(coalescedPerSecVal)).toLocaleString();
+    }
 
     // Check both camelCase and PascalCase just in case
     const serverRateVal = stats.serverGenerationRatePerSec ?? stats.ServerGenerationRatePerSec;
