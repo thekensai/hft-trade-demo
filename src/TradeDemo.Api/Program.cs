@@ -1,4 +1,5 @@
 using TradeDemo.Api.Hubs;
+using TradeDemo.Api.Journal;
 using TradeDemo.Api.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -14,9 +15,13 @@ builder.Services.AddCors(options =>
 
 builder.Services.AddSingleton<PerformanceMetrics>();
 builder.Services.AddSingleton<GenerationStats>();
+builder.Services.AddTickJournal(builder.Configuration);
+builder.Services.AddSingleton<TickSequencer>();
+builder.Services.AddSingleton<LosslessTickStore>();
 builder.Services.AddSingleton<MarketDataSimulator>();
 builder.Services.AddSingleton<TradeQueueProcessor>();
 builder.Services.AddSingleton<ReplayEngine>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<LosslessTickStore>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<MarketDataSimulator>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<TradeQueueProcessor>());
 
@@ -46,13 +51,22 @@ app.MapGet("/api/metrics/stream", async (PerformanceMetrics metrics, HttpContext
     }
 });
 
-app.MapGet("/api/queue/stats", (TradeQueueProcessor processor) => Results.Ok(new
+app.MapGet("/api/queue/stats", (TradeQueueProcessor processor, LosslessTickStore tickStore) => Results.Ok(new
 {
     processed = processor.ProcessedCount,
     dropped = processor.DroppedCount,
     queueDepth = processor.QueueDepth,
+    lossless = tickStore.GetStats(),
     timestamp = DateTime.UtcNow
 }));
+
+app.MapGet("/api/ticks/recent", (LosslessTickStore tickStore, int count = 1000) =>
+    Results.Ok(tickStore.GetRecentTicks(count)));
+
+app.MapGet("/api/ticks/from/{sequenceId:long}", (LosslessTickStore tickStore, long sequenceId, int count = 1000) =>
+    Results.Ok(tickStore.GetTicksFromSequence(sequenceId, count)));
+
+app.MapGet("/api/ticks/stats", (LosslessTickStore tickStore) => Results.Ok(tickStore.GetStats()));
 
 app.MapGet("/api/system/metrics", (PerformanceMetrics metrics) => Results.Ok(metrics.GetSnapshot()));
 
@@ -70,6 +84,18 @@ app.MapGet("/api/replay/scenarios", () => Results.Ok(new[]
 app.MapPost("/api/replay/start", async (ReplayScenario scenario, ReplayEngine engine) =>
 {
     await engine.StartScenarioAsync(scenario);
+    return Results.Ok(engine.CurrentState);
+});
+
+app.MapPost("/api/replay/recent", async (ReplayEngine engine, int count = 10_000, double speed = 1) =>
+{
+    await engine.StartRecentTicksReplayAsync(count, speed);
+    return Results.Ok(engine.CurrentState);
+});
+
+app.MapPost("/api/replay/journal/from/{sequenceId:long}", async (ReplayEngine engine, long sequenceId, int count = 10_000, double speed = 1) =>
+{
+    await engine.StartJournalReplayFromSequenceAsync(sequenceId, count, speed);
     return Results.Ok(engine.CurrentState);
 });
 

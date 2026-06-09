@@ -172,3 +172,25 @@ Subdomains are simpler than apex/root domains and are the recommended option for
 - `deploy-container.ps1` uses `.NET PublishContainer` and avoids the `az containerapp up` ACR build path, which hit an Azure CLI bug and ACR Tasks restrictions in this subscription.
 - `bind-custom-domain.ps1` prints the exact DNS records for a custom hostname and can bind the hostname after propagation.
 - Container Apps consumption plan has no upfront VM quota requirement.
+
+
+Added journal replay support:
+
+
+POST /api/replay/journal/from/{sequenceId}?count=10000&speed=1
+This reads from ITickJournalReader and replays to the UI path only.
+
+How to enable local journal
+Run with env vars:
+
+
+$env:TickJournal__Enabled="true"
+$env:TickJournal__Provider="Local"
+$env:TickJournal__Local__DirectoryPath="data/tick-journal"
+dotnet run
+Then journal files should appear under:
+
+
+src/TradeDemo.Api/data/tick-journal/
+Important note
+Blob and Event Hubs adapters are implemented behind the same interfaces, but Azure infra/config still needs to be provided before using them in deployment.

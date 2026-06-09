@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Threading.Channels;
 using Microsoft.AspNetCore.SignalR;
 using TradeDemo.Api.Hubs;
+using TradeDemo.Api.Journal;
 using TradeDemo.Api.Models;
 
 namespace TradeDemo.Api.Services;
@@ -19,12 +20,14 @@ namespace TradeDemo.Api.Services;
 public class ReplayEngine
 {
     private readonly TradeQueueProcessor _queueProcessor;
+    private readonly LosslessTickStore _tickStore;
+    private readonly ITickJournalReader _journalReader;
+    private readonly TickSequencer _sequencer;
     private readonly PerformanceMetrics _metrics;
     private readonly IHubContext<TradeHub> _hubContext;
     private readonly ILogger<ReplayEngine> _logger;
     private CancellationTokenSource? _replayCts;
     private static readonly Random _rng = new();
-    private long _sequenceId = 0;
 
     public ReplayState CurrentState { get; private set; } = new();
 
@@ -44,11 +47,17 @@ public class ReplayEngine
 
     public ReplayEngine(
         TradeQueueProcessor queueProcessor,
+        LosslessTickStore tickStore,
+        ITickJournalReader journalReader,
+        TickSequencer sequencer,
         PerformanceMetrics metrics,
         IHubContext<TradeHub> hubContext,
         ILogger<ReplayEngine> logger)
     {
         _queueProcessor = queueProcessor;
+        _tickStore = tickStore;
+        _journalReader = journalReader;
+        _sequencer = sequencer;
         _metrics = metrics;
         _hubContext = hubContext;
         _logger = logger;
@@ -86,6 +95,107 @@ public class ReplayEngine
 
         CurrentState = new ReplayState { IsRunning = false };
         await _hubContext.Clients.All.SendAsync("ReplayStateChanged", CurrentState);
+    }
+
+    public async Task StartRecentTicksReplayAsync(int count, double speedMultiplier = 1)
+    {
+        await StopAsync();
+
+        var ticks = _tickStore.GetRecentTicks(count);
+        _replayCts = new CancellationTokenSource();
+        CurrentState = new ReplayState
+        {
+            IsRunning = true,
+            ScenarioName = $"Recent Tick Log ({ticks.Count:N0} ticks)",
+            TargetRate = 0,
+            StartedAt = DateTime.UtcNow
+        };
+
+        _ = Task.Run(() => RunRecentTicksReplayAsync(ticks, speedMultiplier, _replayCts.Token));
+
+        await _hubContext.Clients.All.SendAsync("ReplayStateChanged", CurrentState);
+    }
+
+    public async Task StartJournalReplayFromSequenceAsync(long sequenceId, int count, double speedMultiplier = 1)
+    {
+        await StopAsync();
+
+        _replayCts = new CancellationTokenSource();
+        CurrentState = new ReplayState
+        {
+            IsRunning = true,
+            ScenarioName = $"Journal Replay from {sequenceId:N0}",
+            TargetRate = 0,
+            StartedAt = DateTime.UtcNow
+        };
+
+        _ = Task.Run(() => RunJournalReplayFromSequenceAsync(sequenceId, count, speedMultiplier, _replayCts.Token));
+
+        await _hubContext.Clients.All.SendAsync("ReplayStateChanged", CurrentState);
+    }
+
+    private async Task RunJournalReplayFromSequenceAsync(long sequenceId, int count, double speedMultiplier, CancellationToken ct)
+    {
+        var ticks = new List<TradeSignal>(Math.Max(0, count));
+        await foreach (var tick in _journalReader.ReadFromSequenceAsync(sequenceId, count, ct))
+        {
+            ticks.Add(tick);
+        }
+
+        await RunRecentTicksReplayAsync(ticks, speedMultiplier, ct);
+    }
+
+    private async Task RunRecentTicksReplayAsync(IReadOnlyList<TradeSignal> ticks, double speedMultiplier, CancellationToken ct)
+    {
+        speedMultiplier = Math.Max(0.01, speedMultiplier);
+
+        _logger.LogInformation("Recent tick replay started: {Count:N0} ticks at {Speed}x", ticks.Count, speedMultiplier);
+
+        var sw = Stopwatch.StartNew();
+        long messagesSent = 0;
+        var previousTimestamp = ticks.Count > 0 ? ticks[0].Timestamp : DateTime.UtcNow;
+
+        try
+        {
+            foreach (var tick in ticks)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                var delay = tick.Timestamp - previousTimestamp;
+                if (delay > TimeSpan.Zero)
+                {
+                    var scaledDelay = TimeSpan.FromTicks((long)(delay.Ticks / speedMultiplier));
+                    if (scaledDelay > TimeSpan.Zero)
+                    {
+                        await Task.Delay(scaledDelay, ct);
+                    }
+                }
+                previousTimestamp = tick.Timestamp;
+
+                // Replay into the UI pipeline only. The authoritative tick log already
+                // contains this tick, so do not append it back into LosslessTickStore.
+                _queueProcessor.TryEnqueue(tick);
+                messagesSent++;
+
+                if (messagesSent % 1_000 == 0)
+                {
+                    CurrentState = CurrentState with
+                    {
+                        MessagesSent = messagesSent,
+                        CurrentRate = messagesSent / Math.Max(0.001, sw.Elapsed.TotalSeconds),
+                        ElapsedSeconds = sw.Elapsed.TotalSeconds
+                    };
+                    await _hubContext.Clients.All.SendAsync("ReplayStateChanged", CurrentState, ct);
+                }
+            }
+        }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            CurrentState = CurrentState with { IsRunning = false, MessagesSent = messagesSent };
+            await _hubContext.Clients.All.SendAsync("ReplayStateChanged", CurrentState);
+            _logger.LogInformation("Recent tick replay completed: {Messages:N0} messages in {Elapsed:F1}s", messagesSent, sw.Elapsed.TotalSeconds);
+        }
     }
 
     private async Task RunScenarioAsync(ReplayScenario scenario, CancellationToken ct)
@@ -156,11 +266,12 @@ public class ReplayEngine
                         Exchange: exchange,
                         Timestamp: DateTime.UtcNow,
                         Direction: _rng.NextDouble() > 0.5 ? "BUY" : "SELL",
-                        SequenceId: Interlocked.Increment(ref _sequenceId)
+                        SequenceId: _sequencer.Next()
                     );
 
                     var enqueueSw = Stopwatch.StartNew();
-                    _ = _queueProcessor.EnqueueAsync(signal); // Fire-and-forget; metrics recorded immediately
+                    _tickStore.TryAppend(signal);
+                    _queueProcessor.TryEnqueue(signal);
                     _metrics.RecordLatency(enqueueSw.ElapsedTicks);
 
                     messagesSent++;

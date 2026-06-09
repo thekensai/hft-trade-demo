@@ -23,8 +23,9 @@ public class MarketDataSimulator : BackgroundService
     private readonly ILogger<MarketDataSimulator> _logger;
     private readonly TradeQueueProcessor _queueProcessor;
     private readonly GenerationStats _generationStats;
+    private readonly LosslessTickStore _tickStore;
+    private readonly TickSequencer _sequencer;
     private static readonly Random _rng = new();
-    private long _sequenceId = 0;
 
     // Preallocated string references to avoid allocations
     private const string Buy = "BUY";
@@ -56,11 +57,18 @@ public class MarketDataSimulator : BackgroundService
     private int _sameSideStreak = 0;
     private string? _lastDirection;
 
-    public MarketDataSimulator(ILogger<MarketDataSimulator> logger, TradeQueueProcessor queueProcessor, GenerationStats generationStats)
+    public MarketDataSimulator(
+        ILogger<MarketDataSimulator> logger,
+        TradeQueueProcessor queueProcessor,
+        GenerationStats generationStats,
+        LosslessTickStore tickStore,
+        TickSequencer sequencer)
     {
         _logger = logger;
         _queueProcessor = queueProcessor;
         _generationStats = generationStats;
+        _tickStore = tickStore;
+        _sequencer = sequencer;
         _currentPrices = Instruments.Select(i => i.BasePrice).ToArray();
     }
 
@@ -146,11 +154,13 @@ public class MarketDataSimulator : BackgroundService
                     Exchange: exchange,
                     Timestamp: batchTimestamp,
                     Direction: direction,
-                    SequenceId: Interlocked.Increment(ref _sequenceId)
+                    SequenceId: _sequencer.Next()
                 );
 
-                // Fast enqueue — TryEnqueue handles the metric counter and never blocks
-                // (DropOldest mode means TryWrite always returns true)
+                // Split the pipeline immediately:
+                // - Lossless/replay path gets every accepted tick in sequence order.
+                // - UI path remains coalesced and browser-friendly.
+                _tickStore.TryAppend(signal);
                 _queueProcessor.TryEnqueue(signal);
 
                 _generationStats.Increment();

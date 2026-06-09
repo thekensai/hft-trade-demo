@@ -199,8 +199,9 @@ venv.bak/
 /files/
 /.ai/
 
-/HFT_Strategy
+HFT_Strategy/
 *.explain.md
 claude_prompt.txt
-/.claude/
-/.vs
+.claude/
+.vs/
+data/
