@@ -29,6 +29,9 @@ if (-not $RegistryName) {
 
 $indexPath = Join-Path $PSScriptRoot 'src\TradeDemo.Api\wwwroot\index.html'
 $indexHtml = Get-Content $indexPath -Raw
+if ([string]::IsNullOrWhiteSpace($indexHtml)) {
+    throw "Refusing to deploy: '$indexPath' is empty."
+}
 $indexHtml = $indexHtml -replace 'href="css/shared\.css(?:\?v=[^"]*)?"', "href=`"css/shared.css?v=$ImageTag`""
 $indexHtml = $indexHtml -replace 'href="css/terminal\.css(?:\?v=[^"]*)?"', "href=`"css/terminal.css?v=$ImageTag`""
 $indexHtml = $indexHtml -replace 'src="js/terminal\.js(?:\?v=[^"]*)?"', "src=`"js/terminal.js?v=$ImageTag`""
