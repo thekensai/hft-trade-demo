@@ -1,332 +1,479 @@
-# Trade Signal Terminal — Architecture
+# Trade Demo Architecture
 
 ## System Overview
 
-A real-time trade signal processing demo built on .NET 8 and hosted on Azure, showcasing high-throughput event ingestion, lock-free metrics, bounded-channel backpressure, and deterministic replay — patterns used in production trading systems.
+This repository implements a .NET 8 trading-infrastructure demo with two intentionally separate paths:
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        Azure Container Apps                          │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│  ┌──────────────┐    ┌──────────────────┐    ┌──────────────────┐  │
-│  │ MarketData   │───▶│ BoundedChannel   │───▶│ TradeQueue       │  │
-│  │ Simulator    │    │ <TradeSignal>     │    │ Processor        │  │
-│  │ (Producer)   │    │ Cap:10K DropOld   │    │ (Consumer)       │  │
-│  └──────────────┘    └──────────────────┘    └────────┬─────────┘  │
-│         │                                             │             │
-│         │            ┌──────────────────┐             │             │
-│         └───────────▶│ Performance      │◀────────────┘             │
-│                      │ Metrics          │                           │
-│                      │ (Lock-free)      │                           │
-│                      └────────┬─────────┘                           │
-│                               │                                     │
-│  ┌──────────────┐    ┌───────▼──────────┐    ┌──────────────────┐  │
-│  │ Replay       │───▶│ SignalR Hub       │───▶│ Browser Clients  │  │
-│  │ Engine       │    │ /tradehub         │    │           
-│  └──────────────┘    └──────────────────┘    └──────────────────┘  │
-│                                                                     │
-└─────────────────────────────────────────────────────────────────────┘
-```
+1. **Market-data path** — high-throughput synthetic ticks flow through bounded channels, coalesced SignalR snapshots, metrics, lossless recent storage, and optional durable tick journals.
+2. **Order/execution path** — browser orders are submitted through REST APIs into an in-memory exchange simulator that performs risk checks, consumes a stateful synthetic depth-of-market book, emits lifecycle events and partial fills, updates positions/PnL, and exposes execution statistics.
 
-## Pipeline Architecture
+The goal is not to implement a real exchange, production OMS, or full matching engine. The goal is to demonstrate realistic trading-system mechanics: streaming market data, backpressure, replay, order lifecycle, pre-trade risk, synthetic liquidity consumption, partial fills, inventory risk, and observable latency breakdowns.
 
-### Producer: MarketDataSimulator
+```text
+Browser Trading Terminal
+(HTML/CSS/Vanilla JS)
 
-A `BackgroundService` that generates synthetic market events at 200–500 events/sec across 15 instruments (equities, futures, FX). Each tick carries a high-resolution timestamp (`Stopwatch.GetTimestamp()`) for end-to-end latency measurement.
+├── SignalR /tradehub
+│   └── Live market-data snapshots + server stats
+│
+└── REST APIs
+    ├── /api/orders
+    ├── /api/depth/{symbol}
+    ├── /api/orders/open
+    ├── /api/executions
+    ├── /api/execution-stats
+    ├── /api/positions
+    └── /api/market-maker/state
 
-```
-┌────────────────────────────────────────────────┐
-│ MarketDataSimulator (BackgroundService)         │
-├────────────────────────────────────────────────┤
-│ • 15 instruments with volatility profiles      │
-│ • Random walk price model per instrument       │
-│ • Configurable rate: 200-500 events/sec        │
-│ • Writes to Channel<TradeSignal>               │
-│ • TryWrite() — non-blocking, never awaits      │
-└────────────────────────────────────────────────┘
-```
+ASP.NET Core API
 
-### Queue: System.Threading.Channels\<T\>
-
-The queue is the system's critical path. We use `BoundedChannel<TradeSignal>` with:
-
-| Property | Value | Rationale |
-|----------|-------|-----------|
-| Capacity | 10,000 | ~20 seconds of buffer at peak rate |
-| FullMode | DropOldest | Stale data is worthless; always prefer fresh |
-| SingleWriter | false | Replay engine + simulator write concurrently |
-| SingleReader | true | Single consumer enables lock-free fast path |
-
-**Why Channels\<T\> over ConcurrentQueue + polling?**
-- `WaitToReadAsync()` is truly asynchronous — no spin-wait, no thread burn
-- Bounded capacity with `DropOldest` gives automatic backpressure
-- `SingleReader: true` enables the runtime to skip synchronization on the read path
-- Integrates natively with `async/await` and `CancellationToken`
-
-### Consumer: TradeQueueProcessor
-
-A `BackgroundService` that drains the channel in batches and broadcasts via SignalR:
-
-```
-while (await reader.WaitToReadAsync(ct))
-{
-    while (reader.TryRead(out var signal))
-    {
-        batch.Add(signal);
-        metrics.RecordLatency(signal.EnqueuedAt);
-        
-        if (batch.Count >= batchSize) 
-        {
-            await hub.Clients.All.SendAsync("TradeSignal", batch, ct);
-            batch.Clear();
-        }
-    }
-    // Flush remaining
-    if (batch.Count > 0)
-        await hub.Clients.All.SendAsync("TradeSignal", batch, ct);
-}
+├── MarketDataSimulator
+│   ├── LosslessTickStore → recent ring buffer + optional journal
+│   └── TradeQueueProcessor → coalesced SignalR UI stream
+│
+├── ReplayEngine
+│   ├── scenario replay
+│   ├── recent tick replay
+│   └── journal replay
+│
+└── Order/Execution Simulation
+    ├── RiskEngine
+    ├── ExchangeSimulator
+    │   ├── stateful synthetic DOM
+    │   ├── order lifecycle events
+    │   ├── partial fills
+    │   ├── open orders / cancel / modify
+    │   └── execution latency breakdown
+    └── PositionManager
+        └── position + derived unrealized PnL
 ```
 
-**Key design decisions:**
-- Batch drain: Reads everything available before sending → fewer SignalR frames, lower overhead
-- No `Task.Delay` polling: Pure event-driven consumption
-- Latency recording at dequeue time: Enables p50/p95/p99 tracking without impacting throughput
+## Important Naming Boundaries
 
-## Performance Metrics — Lock-Free Design
+This project uses trading-system terminology, but the boundaries are deliberate:
 
-### Why Lock-Free?
+| Term | Current implementation |
+|---|---|
+| Frontend | Browser terminal built with static HTML/CSS/vanilla JavaScript, not React. |
+| SignalR | Used for live market-data and stats streaming, not order submission. |
+| Order API | REST endpoints in `Program.cs`; there is no separate order-gateway service class. |
+| Exchange simulator | In-memory simulation of lifecycle, synthetic DOM consumption, partial fills, and resting demo limit orders. |
+| Matching engine | Not a real matching engine. No real price-time priority book or market microstructure. |
+| Event stream | Represented as order lifecycle events, execution reports, SignalR market-data events, and API responses. There is no standalone Kafka/EventStore event bus. |
+| PnL service | PnL is derived from `PositionManager` state, not a separate service. |
 
-In a trading system, the metrics path runs on every single message. A `lock` statement would:
-1. Introduce priority inversion (GC thread holding the lock)
-2. Create contention between producer (recording) and reader (API endpoint)
-3. Add ~50ns per acquisition — unacceptable at 500+ msg/sec
+## Market-Data Pipeline
 
-### Implementation: Circular Buffer + Interlocked CAS
+### Producer: `MarketDataSimulator`
 
-```csharp
-// Lock-free write via Interlocked.Increment
-public void RecordLatency(long enqueuedTimestamp)
-{
-    long latencyTicks = Stopwatch.GetTimestamp() - enqueuedTimestamp;
-    double latencyMs = (double)latencyTicks / Stopwatch.Frequency * 1000.0;
-    
-    int index = Interlocked.Increment(ref _writePosition) & (_bufferSize - 1);
-    _latencyBuffer[index] = (long)(latencyMs * 1000); // Store as microseconds
-}
+`MarketDataSimulator` is a background service that generates synthetic trade signals across equities, crypto, and futures-style instruments. Each `TradeSignal` includes:
+
+- symbol
+- bid/ask/mid prices
+- price change
+- volume
+- exchange
+- timestamp
+- side/direction
+- monotonic sequence ID
+
+The simulator writes each generated signal to two paths:
+
+```text
+MarketDataSimulator
+├── LosslessTickStore.TryAppend(signal)
+└── TradeQueueProcessor.TryEnqueue(signal)
 ```
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│ Circular Buffer (4096 slots, power-of-2 for & masking)      │
-├─────────────────────────────────────────────────────────────┤
-│ [0] [1] [2] ... [4095]                                      │
-│      ▲                                                       │
-│      └── _writePosition (Interlocked.Increment)             │
-│                                                              │
-│ Snapshot: Copy buffer → ArrayPool<long> → Sort → Percentile │
-│ • ArrayPool avoids GC pressure on hot path                   │
-│ • Snapshot is O(n log n) but runs on API thread, not hot path│
-└─────────────────────────────────────────────────────────────┘
-```
+This split is important:
 
-### Percentile Computation
+- The **lossless/replay path** aims to retain accepted ticks in sequence order for replay and journal persistence.
+- The **UI path** is intentionally coalesced and browser-friendly.
 
-```csharp
-public PerformanceSnapshot GetSnapshot()
-{
-    long[] sorted = ArrayPool<long>.Shared.Rent(_bufferSize);
-    try
-    {
-        Array.Copy(_latencyBuffer, sorted, _bufferSize);
-        Array.Sort(sorted, 0, _bufferSize);
-        
-        // Skip zero entries (unfilled slots)
-        int start = Array.BinarySearch(sorted, 0, _bufferSize, 1L);
-        if (start < 0) start = ~start;
-        int count = _bufferSize - start;
-        
-        return new PerformanceSnapshot(
-            P50: sorted[start + (int)(count * 0.50)] / 1000.0,
-            P95: sorted[start + (int)(count * 0.95)] / 1000.0,
-            P99: sorted[start + (int)(count * 0.99)] / 1000.0,
-            // ...
-        );
-    }
-    finally
-    {
-        ArrayPool<long>.Shared.Return(sorted);
-    }
-}
+### UI Stream: `TradeQueueProcessor`
+
+`TradeQueueProcessor` owns a bounded `Channel<TradeSignal>` with drop-oldest behavior. This is appropriate for a real-time UI because stale quotes are less valuable than fresh quotes.
+
+```text
+MarketDataSimulator
+    ↓ TryEnqueue
+Bounded Channel<TradeSignal>
+    ↓ drain loop
+Latest-by-symbol snapshot
+    ↓ SignalR
+Browser clients
 ```
 
-## Latency Budget
+Key mechanics:
 
-| Stage | Target | Measured |
-|-------|--------|----------|
-| Producer → Channel.TryWrite | <1μs | ~0.3μs |
-| Channel queue wait | <5ms (p99) | ~2ms |
-| Consumer batch + SignalR serialize | <10ms | ~6ms |
-| WebSocket frame to browser | <15ms | ~8ms (local) |
-| **End-to-end (tick → pixel)** | **<50ms** | **~16ms (local)** |
+- bounded channel capacity
+- single-reader drain loop
+- multiple producer support
+- latest-by-symbol coalescing
+- SignalR broadcast cadence around UI refresh rates
+- interlocked counters for processed/dropped/coalesced stats
 
-## Replay Engine
+The UI does **not** receive every raw tick. It receives compact snapshots that keep the browser responsive while the server continues processing high raw event rates.
 
-### Purpose
+### Lossless Recent Store + Journal
 
-Deterministic playback of market scenarios allows:
-- Demonstrating system behavior under specific conditions (burst, crash, ramp)
-- Testing without live data
-- Reproducing edge cases on demand
+`LosslessTickStore` maintains an in-process recent tick ring buffer and optionally writes batches to a configured tick journal.
 
-### Traffic Profiles
+Supported journal interfaces:
 
-```
-Constant       Burst          FlashCrash       Ramp
-───────────    ─┐  ┌──       ────┐            ╱
-               │  │             │ ▼          ╱
-               │  │             │            ╱
-───────────    ─┘  └──       ────┘ ────    ╱─────
-100/s          500→50→500     500→0→200    50→500/s
+```text
+ITickJournalWriter
+ITickJournalReader
+ITickJournal
 ```
 
-| Scenario | Rate Profile | Duration | Purpose |
-|----------|-------------|----------|---------|
-| Constant | 100 msg/s steady | 60s | Baseline behavior |
-| Burst | 500ms bursts every 2s | 30s | Channel backpressure + drop behavior |
-| FlashCrash | 500 → 0 → recovery | 20s | Reconnect + empty-state handling |
-| Ramp | 50 → 500 linear | 45s | Scaling headroom |
+Implemented providers include:
 
-### Disconnect Simulation
+- local segment files
+- Azure Blob-backed journal
+- Azure Event Hubs-backed journal adapter
+- null journal
 
-The replay engine can inject artificial disconnects to demonstrate:
-- SignalR automatic reconnection (exponential backoff)
-- Client-side buffering during gap
-- State reconciliation on reconnect
+The recent in-memory store is useful for fast local replay. The journal abstraction is useful for durable replay scenarios. Under extreme saturation, the in-memory append path can count drops, so use the word “lossless” as the intent of the authoritative path rather than a guarantee under all overload conditions.
+
+## Replay Architecture
+
+`ReplayEngine` supports two classes of replay:
+
+### 1. Scenario Replay
+
+Synthetic traffic profiles demonstrate backpressure and UI behavior:
+
+| Scenario | Purpose |
+|---|---|
+| Calm Market | Baseline steady-state behavior |
+| NASDAQ Burst | Burst traffic and queue pressure |
+| Flash Crash | Volatility spike and recovery behavior |
+| Ramp to Saturation | Increasing load and queue saturation |
+| Exchange Disconnect | UI reconnect/empty-window behavior |
+
+### 2. Historical Tick Replay
+
+Replay can also read from:
+
+- recent in-memory tick log
+- journal by sequence ID
+
+```text
+POST /api/replay/recent?count=10000&speed=1
+POST /api/replay/journal/from/{sequenceId}?count=10000&speed=1
+```
+
+Journal replay sends historical ticks back into the UI pipeline without re-appending them to the authoritative tick store.
+
+## Order and Execution Simulation
+
+The order path is REST-driven and separate from the SignalR market-data stream.
+
+```text
+Browser Order Entry
+    ↓ POST /api/orders
+Order API
+    ↓
+ExchangeSimulator.SubmitOrderAsync
+    ↓
+RiskEngine.Check
+    ↓
+ExchangeSimulator stateful DOM
+    ↓
+Partial Fill(s)
+    ↓
+PositionManager.ApplyFill
+    ↓
+OrderResult returned to UI
+```
+
+### Order Lifecycle Events
+
+Each order returns timestamped lifecycle events, for example:
+
+```text
+09:30:00.123 Submitted        Order Submitted BUY 100 ES @ Market
+09:30:00.126 Risk Check Passed Risk Check Passed (3.1ms)
+09:30:00.131 Routed           Routed to CME (5.4ms)
+09:30:00.143 Accepted         Accepted (12.2ms)
+09:30:00.151 Fill             Filled 30 @ 5982.25
+09:30:00.156 Fill             Filled 45 @ 5982.50
+09:30:00.162 Fill             Filled 25 @ 5982.75
+09:30:00.163 Filled           Filled (19.5ms)
+```
+
+The lifecycle stream is exposed in the `OrderResult` response and rendered by the browser. It is not currently pushed through SignalR as a separate event bus.
+
+### Synthetic Depth-of-Market
+
+`ExchangeSimulator` owns a stateful synthetic depth book per symbol. For ES, it uses a tick size of `0.25`.
+
+Example pre-trade book:
+
+```text
+ASK 5982.75  25
+ASK 5982.50  45
+ASK 5982.25  30
+---- MID 5982.00 ----
+BID 5981.75  60
+BID 5981.50  40
+```
+
+A `BUY 100 ES @ Market` consumes ask-side liquidity:
+
+```text
+30 @ 5982.25
+45 @ 5982.50
+25 @ 5982.75
+```
+
+Then the consumed levels disappear and the book replenishes farther away:
+
+```text
+ASK 5983.25 100
+ASK 5983.00  60
+---- MID 5982.00 ----
+BID 5981.75  60
+BID 5981.50  40
+```
+
+This demonstrates:
+
+- liquidity consumption
+- partial fills
+- slippage
+- market impact
+- average fill price
+
+It is still not a real matching engine. There is no true price-time priority, queue position, self-match prevention, or external market participant model.
+
+### DOM Ticking
+
+The synthetic depth book also “ticks” when refreshed:
+
+```text
+ASK 5982.25 30 → 32
+BID 5981.75 60 → 55
+MID 5982.00 → 5982.25
+```
+
+The browser polls `/api/depth/ES` periodically so the DOM appears alive even when no order is submitted.
+
+## Risk Controls
+
+`RiskEngine` performs pre-trade checks before an order is routed/accepted:
+
+| Check | Behavior |
+|---|---|
+| Quantity check | Rejects non-positive quantity |
+| Side check | Allows only BUY/SELL |
+| Max order quantity | Rejects orders above configured quantity limit |
+| Max notional | Rejects orders above configured notional limit |
+| Fat-finger band | Rejects limit prices more than 5% away from reference price |
+| Position limit | Rejects orders that would breach max position |
+| Demo venue throttle | Rare low-rate synthetic reject for small demo/market-maker orders |
+
+Example rejects:
+
+```text
+Rejected - Position Limit Exceeded
+Rejected - Fat Finger Check - limit price outside 5% reference band
+Rejected - Risk Limit Breach - simulated venue throttle
+```
+
+Rejected orders appear as red lifecycle rows in the UI.
+
+## Position and PnL
+
+`PositionManager` applies fills incrementally:
+
+```text
+Fill
+    ↓
+PositionManager.ApplyFill
+    ↓
+Position quantity / average price / mark price / unrealized PnL
+```
+
+It tracks:
+
+- signed quantity
+- average price
+- mark price
+- derived unrealized PnL
+- update time
+
+PnL is currently derived from position state. There is no separate PnL service and no realized PnL/fees model.
+
+## Market Maker Demo
+
+The UI includes an optional market-maker mode. It is intentionally UI-driven rather than a backend hosted strategy service.
+
+When enabled, the browser periodically:
+
+1. fetches `/api/depth/ES`
+2. fetches `/api/market-maker/state`
+3. submits small bid/ask limit orders if inventory risk allows
+4. occasionally submits a tiny market order to demonstrate inventory/PnL movement
+
+Market-maker risk state is exposed by:
+
+```text
+GET /api/market-maker/state
+```
+
+The state includes:
+
+```text
+Inventory
+InventoryLimit
+Status
+BidEnabled
+AskEnabled
+```
+
+Example states:
+
+```text
+Inventory:       +27
+Inventory Limit: 50
+Status:          NORMAL
+Quotes:          BID/ASK
+```
+
+```text
+Inventory:       +43
+Inventory Limit: 50
+Status:          INVENTORY LONG
+Quotes:          —/ASK
+```
+
+```text
+Inventory:       +50
+Inventory Limit: 50
+Status:          BID DISABLED
+Quotes:          —/ASK
+```
+
+This demonstrates the basic market-making idea of inventory-aware quoting without implementing a full strategy engine.
+
+## Latency Breakdown
+
+Each submitted order returns a simulated latency breakdown:
+
+```text
+Risk Check     3.1ms
+Route          5.4ms
+Exchange      12.2ms
+Fill          19.5ms
+Total         40.2ms
+```
+
+These are demo path timings measured around the simulated stages and small `Task.Delay` hops. They are useful for explaining order-path mechanics, not for claiming production exchange latency.
+
+## API Surface
+
+### Market Data / Metrics
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/health` | Basic health check |
+| `GET /api/metrics` | Performance snapshot |
+| `GET /api/metrics/stream` | SSE metrics stream |
+| `GET /api/queue/stats` | Queue/coalescing/lossless stats |
+| `GET /api/ticks/recent` | Recent in-memory tick log |
+| `GET /api/ticks/from/{sequenceId}` | Recent ticks from sequence |
+| `GET /api/ticks/stats` | Lossless tick store stats |
+| `GET /api/system/metrics` | CPU/memory/thread metrics |
+
+### Replay
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/replay/scenarios` | Available replay scenarios |
+| `POST /api/replay/start` | Start a scenario replay |
+| `POST /api/replay/recent` | Replay recent ticks |
+| `POST /api/replay/journal/from/{sequenceId}` | Replay journal ticks from sequence |
+| `POST /api/replay/stop` | Stop replay |
+| `GET /api/replay/state` | Current replay state |
+
+### Order / Execution
+
+| Endpoint | Description |
+|---|---|
+| `POST /api/orders` | Submit an order |
+| `GET /api/orders` | All known orders |
+| `GET /api/orders/open` | Working/open orders |
+| `DELETE /api/orders/{orderId}` | Cancel an open order |
+| `PUT /api/orders/{orderId}` | Modify an open order |
+| `GET /api/executions` | Execution reports |
+| `GET /api/execution-stats` | Order/fill/cancel/PnL statistics |
+| `GET /api/depth/{symbol}` | Current synthetic DOM snapshot |
+| `GET /api/positions` | Current positions |
+| `GET /api/market-maker/state` | Inventory-risk state for market-maker demo |
 
 ## Concurrency Model
 
-### Thread Allocation
+| Component | Model | Notes |
+|---|---|---|
+| MarketDataSimulator | `BackgroundService` | Generates synthetic ticks continuously |
+| LosslessTickStore | `BackgroundService` + bounded channel | Stores recent accepted ticks and journal batches |
+| TradeQueueProcessor | `BackgroundService` + bounded channel | Coalesces latest symbol snapshots for SignalR |
+| ReplayEngine | async tasks | Runs one replay at a time via cancellation token |
+| ExchangeSimulator | singleton + locks | Protects in-memory orders, executions, lifecycle, and synthetic DOM |
+| PositionManager | singleton + locks | Protects position dictionary |
+| SignalR hub | event-driven | Streams market data/stats to browser clients |
 
-| Thread/Task | What it does | Blocking? |
-|-------------|-------------|-----------|
-| MarketDataSimulator | Generates events, writes to channel | Never blocks (TryWrite) |
-| TradeQueueProcessor | Reads channel, sends SignalR | Suspends on WaitToReadAsync |
-| ReplayEngine | Generates scenario events | Suspends on Task.Delay |
-| Kestrel I/O threads | HTTP/WebSocket I/O | Never blocks (async) |
-| SignalR hub | Manages connections | Event-driven |
-
-### Zero-Allocation Hot Path
-
-The event-processing hot path avoids allocations:
-
-1. **TradeSignal** is a `record struct` — stack-allocated, no GC pressure
-2. **Latency buffer** uses pre-allocated `long[]` — no per-message allocation
-3. **Percentile snapshots** rent from `ArrayPool<long>` — pooled, returned after use
-4. **Batch list** is reused (Clear, not re-created) per drain cycle
-
-### Backpressure Strategy
-
-```
-Normal:     Producer 200/s → Channel (depth ~50) → Consumer 200/s ✓
-Overload:   Producer 500/s → Channel (fills to 10K) → DropOldest kicks in
-Recovery:   Producer slows → Channel drains → Consumer catches up
-```
-
-The system never blocks the producer. Stale data is discarded. The consumer always processes the freshest available data — exactly what a trading system needs.
-
-## Scaling Strategy
-
-### Horizontal (Container Apps)
-
-```yaml
-# Azure Container Apps scaling rule
-scale:
-  minReplicas: 1
-  maxReplicas: 10
-  rules:
-    - name: signalr-connections
-      custom:
-        type: external
-        metadata:
-          scalerAddress: keda-signalr-scaler
-          connectionCount: "100"
-```
-
-Each replica is stateless. SignalR uses Azure SignalR Service for cross-instance fan-out in production. The bounded channel is per-instance (no shared state between replicas).
-
-### Vertical
-
-- Channel buffer size tunable via `IConfiguration`
-- Batch size configurable
-- Rate limits adjustable per-instrument
-
-## Failure Modes & Recovery
-
-| Failure | Behavior | Recovery |
-|---------|----------|----------|
-| Consumer slow | Channel fills → DropOldest | Automatic (drops stale) |
-| SignalR disconnect | Client sees gap | Auto-reconnect + state sync |
-| OOM pressure | GC Gen2 collection | ArrayPool prevents fragmentation |
-| Container crash | Azure restarts container | ~5s cold start, clients reconnect |
-| ACR unavailable | Deploy fails | Previous revision stays live |
+The market-data path uses channels. The order path currently uses direct REST calls into singleton services, not an order `Channel<T>`.
 
 ## Deployment Topology
 
-```
-┌──────────────────────────────────────────────────────────┐
-│ Azure (australiaeast)                                     │
-├──────────────────────────────────────────────────────────┤
-│                                                          │
-│  ┌─────────────┐    ┌──────────────┐    ┌────────────┐  │
-│  │ Container   │    │ Container    │    │ Service    │  │
-│  │ Registry    │───▶│ Apps Env     │    │ Bus        │  │
-│  │ (ACR)       │    │ (Log Analyt) │    │ (Standard) │  │
-│  └─────────────┘    └──────┬───────┘    └────────────┘  │
-│                            │                             │
-│                     ┌──────▼───────┐                     │
-│                     │ Container    │                     │
-│                     │ App          │                     │
-│                     │ (tradedemo)  │                     │
-│                     │ :8080        │                     │
-│                     └──────┬───────┘                     │
-│                            │                             │
-└────────────────────────────┼─────────────────────────────┘
-                             │ HTTPS
-                    ┌────────▼────────┐
-                    │ Browser Clients │
-                    │ (WebSocket)     │
-                    └─────────────────┘
+The app is designed to run locally or as a containerized ASP.NET Core service on Azure Container Apps.
+
+```text
+Azure Container Apps
+├── ASP.NET Core API
+├── Static browser terminal
+├── SignalR hub
+├── background market-data services
+└── optional journal adapters
+
+Optional Azure integrations
+├── Blob Storage journal
+├── Event Hubs journal adapter
+├── Container Registry
+└── Log Analytics
 ```
 
-## Technology Choices
+## What This Demo Demonstrates Well
 
-| Choice | Alternative Considered | Why This |
-|--------|----------------------|----------|
-| Channels\<T\> | BlockingCollection, ConcurrentQueue | True async, bounded, backpressure built-in |
-| SignalR | gRPC-Web, SSE | Bidirectional, auto-reconnect, protocol negotiation |
-| record struct | class | Zero-alloc on hot path, value semantics |
-| ArrayPool\<T\> | stackalloc, new[] | Reusable across calls, no GC pressure, safe for large buffers |
-| Interlocked CAS | lock, ReaderWriterLockSlim | Zero contention on write path, wait-free |
-| Container Apps | App Service, AKS | No VM quota needed, consumption billing, KEDA scaling |
-| Bicep | ARM, Terraform | Native Azure, type-safe, modular |
+- high-throughput synthetic market-data generation
+- bounded-channel backpressure and coalesced UI snapshots
+- SignalR live market-data streaming
+- sequence IDs and replay-oriented tick storage
+- deterministic replay scenarios
+- REST order submission
+- pre-trade risk checks
+- stateful synthetic DOM liquidity consumption
+- partial fills and average fill price
+- order lifecycle and latency breakdown
+- open orders, cancel, and modify behavior
+- position updates and derived unrealized PnL
+- market-maker inventory-risk display
 
-## Running Locally
+## What This Demo Intentionally Does Not Implement
 
-```bash
-cd src/TradeDemo.Api
-dotnet run
-# Open http://localhost:5000
-```
+- real exchange connectivity
+- real matching engine
+- real price-time-priority order book
+- order queue position
+- FIX protocol
+- separate OMS/EMS services
+- separate PnL service
+- Kafka/EventStore event bus
+- persistent order/execution database
+- multi-account permissions
+- production-grade risk/compliance controls
 
-## Deploying
-
-```powershell
-# One-time setup
-.\setup-azure.ps1
-
-# Deploy/update
-.\deploy-container.ps1
-```
-
-See [deploy-container.ps1](deploy-container.ps1) for the full image build + push + revision update flow.
+These boundaries are intentional so the project remains a focused portfolio demo rather than an incomplete production trading system.

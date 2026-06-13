@@ -33,6 +33,15 @@ const state = {
     rateHistoryStartedAt: Date.now(),
     maxRateHistorySeconds: 60,
     lastServerRate: 0,
+    lastConsumedFills: [],
+    consumedFillIds: new Set(),
+    maxConsumedFills: 50,
+    maxLifecycleRows: 80,
+    lifecycleEventIds: new Set(),
+    currentPosition: 0,
+    maxPosition: 1000,
+    manualOrderQuantity: 100,
+    orderSubmitInFlight: false,
 };
 
 // ── DOM refs ──
@@ -60,6 +69,32 @@ const dom = {
     statThreadCount: document.getElementById("statThreadCount"),
     rateGraph: document.getElementById("rateGraph"),
     rateTimeAxis: document.getElementById("rateTimeAxis"),
+    buyEsButton: document.getElementById("buyEsButton"),
+    marketMakerToggle: document.getElementById("marketMakerToggle"),
+    depthBook: document.getElementById("depthBook"),
+    consumedLiquidity: document.getElementById("consumedLiquidity"),
+    avgFillBadge: document.getElementById("avgFillBadge"),
+    positionQty: document.getElementById("positionQty"),
+    positionAvg: document.getElementById("positionAvg"),
+    positionRealized: document.getElementById("positionRealized"),
+    positionUnrealized: document.getElementById("positionUnrealized"),
+    orderLifecycle: document.getElementById("orderLifecycle"),
+    openOrders: document.getElementById("openOrders"),
+    execOrdersSent: document.getElementById("execOrdersSent"),
+    execOrdersFilled: document.getElementById("execOrdersFilled"),
+    execCancels: document.getElementById("execCancels"),
+    execFillRatio: document.getElementById("execFillRatio"),
+    execPnl: document.getElementById("execPnl"),
+    latTotal: document.getElementById("latTotal"),
+    latRisk: document.getElementById("latRisk"),
+    latRoute: document.getElementById("latRoute"),
+    latExchange: document.getElementById("latExchange"),
+    latFill: document.getElementById("latFill"),
+    latOther: document.getElementById("latOther"),
+    mmInventory: document.getElementById("mmInventory"),
+    mmInventoryLimit: document.getElementById("mmInventoryLimit"),
+    mmStatus: document.getElementById("mmStatus"),
+    mmQuotes: document.getElementById("mmQuotes"),
 };
 
 // ── Clock ──
@@ -71,7 +106,7 @@ function updateClock() {
 updateClock();
 
 // ── Pause/Resume ──
-dom.pauseResumeButton.addEventListener("click", () => {
+dom.pauseResumeButton?.addEventListener("click", () => {
     state.uiRefreshPaused = !state.uiRefreshPaused;
     dom.pauseResumeButton.textContent = state.uiRefreshPaused ? "Resume" : "Pause";
 
@@ -474,6 +509,10 @@ function accumulateOrderFlow(signal) {
 }
 
 function renderOrderFlow() {
+    if (!dom.orderFlow) {
+        return;
+    }
+
     const sorted = [...state.orderFlow.entries()]
         .map(([sym, f]) => ({ sym, total: f.buys + f.sells, buys: f.buys, sells: f.sells }))
         .sort((a, b) => b.total - a.total)
@@ -646,6 +685,295 @@ async function forceReconnect(reason) {
 }
 
 start();
+
+// ── Order ticket ──
+dom.buyEsButton?.addEventListener("click", async () => {
+    if (isBuyLimitReached()) {
+        updateBuyButtonState();
+        return;
+    }
+
+    await submitOrder({
+        symbol: "ES",
+        side: "BUY",
+        quantity: state.manualOrderQuantity,
+        orderType: "Market",
+        owner: "Manual",
+        useMarketMakerLiquidity: dom.marketMakerToggle?.checked ?? false,
+    });
+});
+
+async function submitOrder(order) {
+    try {
+        state.orderSubmitInFlight = true;
+        updateBuyButtonState();
+        const response = await fetch("/api/orders", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(order),
+        });
+        if (!response.ok) throw new Error(`Order request failed: ${response.status}`);
+        renderOrderResult(await response.json());
+        await refreshTradingPanels();
+    } catch (err) {
+        console.error("Order submit failed:", err);
+        addLifecycleMessage("Rejected", err.message || "Order submit failed");
+    } finally {
+        state.orderSubmitInFlight = false;
+        updateBuyButtonState();
+    }
+}
+
+function renderOrderResult(result) {
+    appendLifecycle(result.lifecycleEvents ?? []);
+    if (result.depth) renderDepth(result.depth, result.consumedLiquidity ?? result.fills ?? []);
+    if (result.position) renderPosition(result.position);
+    if (result.stats) renderExecutionStats(result.stats, result.latency);
+}
+
+async function refreshTradingPanels() {
+    await Promise.all([
+        refreshDepth(),
+        refreshPositions(),
+        refreshOpenOrders(),
+        refreshExecutionStats(),
+        refreshMarketMakerState(),
+    ]);
+}
+
+async function refreshDepth() {
+    if (!dom.depthBook) return;
+    const response = await fetch("/api/depth/ES");
+    if (response.ok) renderDepth(await response.json());
+}
+
+async function refreshPositions() {
+    const response = await fetch("/api/positions");
+    if (!response.ok) return;
+    const positions = await response.json();
+    renderPosition((positions ?? []).find((p) => p.symbol === "ES") ?? null);
+    updateBuyButtonState();
+}
+
+async function refreshOpenOrders() {
+    if (!dom.openOrders) return;
+    const response = await fetch("/api/orders/open");
+    if (response.ok) renderOpenOrders(await response.json());
+}
+
+async function refreshExecutionStats() {
+    const response = await fetch("/api/execution-stats");
+    if (response.ok) renderExecutionStats(await response.json());
+}
+
+async function refreshMarketMakerState() {
+    const response = await fetch("/api/market-maker/state");
+    if (response.ok) renderMarketMakerState(await response.json());
+}
+
+function renderDepth(depth, fills = []) {
+    if (!dom.depthBook || !depth) return;
+    appendConsumedFills(fills);
+    const consumed = aggregateConsumedFills();
+
+    renderConsumedLiquidity(consumed);
+    const askRows = [...(depth.asks ?? [])].reverse().map((level) => depthRow(level, "ask", consumed));
+    const midRow = `<div class="depth-row mid">MID ${formatPrice(depth.midPrice)}</div>`;
+    const bidRows = (depth.bids ?? []).map((level) => depthRow(level, "bid", consumed));
+    dom.depthBook.innerHTML = [...askRows, midRow, ...bidRows].join("");
+    setText(dom.avgFillBadge, `FILL AVG ${formatPrice(weightedAverageFill() ?? depth.midPrice)}`);
+}
+
+function appendConsumedFills(fills) {
+    for (const fill of fills ?? []) {
+        const id = fill.fillId ?? `${fill.orderId}-${fill.price}-${fill.quantity}-${fill.timestamp}`;
+        if (state.consumedFillIds.has(id)) continue;
+        state.consumedFillIds.add(id);
+        state.lastConsumedFills.unshift(fill);
+    }
+
+    state.lastConsumedFills = state.lastConsumedFills.slice(0, state.maxConsumedFills);
+    state.consumedFillIds = new Set(state.lastConsumedFills.map((fill) => fill.fillId ?? `${fill.orderId}-${fill.price}-${fill.quantity}-${fill.timestamp}`));
+}
+
+function aggregateConsumedFills() {
+    const consumed = new Map();
+    state.lastConsumedFills.forEach((fill) => {
+        const key = Number(fill.price).toFixed(2);
+        consumed.set(key, (consumed.get(key) ?? 0) + fill.quantity);
+    });
+    return consumed;
+}
+
+function weightedAverageFill() {
+    const totalQuantity = state.lastConsumedFills.reduce((sum, fill) => sum + Number(fill.quantity), 0);
+    if (totalQuantity === 0) return null;
+    const notional = state.lastConsumedFills.reduce((sum, fill) => sum + Number(fill.quantity) * Number(fill.price), 0);
+    return notional / totalQuantity;
+}
+
+function depthRow(level, side, consumed) {
+    const key = Number(level.price).toFixed(2);
+    const consumedQuantity = consumed.get(key) ?? 0;
+    return `<div class="depth-row ${side}${consumedQuantity > 0 ? " consumed" : ""}">
+        <span>${formatPrice(level.price)}</span>
+        <span>${Number(level.quantity).toLocaleString()}</span>
+        <span>${consumedQuantity > 0 ? `-${consumedQuantity}` : ""}</span>
+    </div>`;
+}
+
+function renderConsumedLiquidity(consumed) {
+    if (!dom.consumedLiquidity) return;
+    if (state.lastConsumedFills.length === 0) {
+        dom.consumedLiquidity.textContent = "Recent consumed: —";
+        return;
+    }
+
+    const total = state.lastConsumedFills.reduce((sum, fill) => sum + Number(fill.quantity), 0);
+    const byPrice = Array.from(consumed.entries()).map(([price, qty]) => `${qty} @ ${price}`).join(", ");
+    dom.consumedLiquidity.textContent = `Recent consumed: ${total} total (${byPrice})`;
+}
+
+function appendLifecycle(events) {
+    if (!dom.orderLifecycle || !events || events.length === 0) return;
+
+    dom.orderLifecycle.querySelector(".lifecycle-row.muted")?.remove();
+    for (const evt of events) {
+        const id = evt.eventId ?? `${evt.orderId}-${evt.stage}-${evt.timestamp}`;
+        if (state.lifecycleEventIds.has(id)) continue;
+        state.lifecycleEventIds.add(id);
+        dom.orderLifecycle.insertAdjacentHTML("afterbegin", lifecycleRow(evt));
+    }
+
+    while (dom.orderLifecycle.children.length > state.maxLifecycleRows) {
+        const row = dom.orderLifecycle.lastElementChild;
+        const id = row?.dataset.eventId;
+        if (id) state.lifecycleEventIds.delete(id);
+        row?.remove();
+    }
+}
+
+function addLifecycleMessage(stage, message) {
+    if (!dom.orderLifecycle) return;
+    dom.orderLifecycle.querySelector(".lifecycle-row.muted")?.remove();
+    dom.orderLifecycle.insertAdjacentHTML("afterbegin", lifecycleRow({ stage, message, timestamp: new Date().toISOString() }));
+    while (dom.orderLifecycle.children.length > state.maxLifecycleRows) dom.orderLifecycle.lastElementChild.remove();
+}
+
+function lifecycleRow(evt) {
+    const stageClass = String(evt.stage ?? "").toLowerCase().replace(/\s+/g, "-");
+    const time = new Date(evt.timestamp).toISOString().substring(11, 23);
+    const id = evt.eventId ?? `${evt.orderId ?? "local"}-${evt.stage}-${evt.timestamp}`;
+    return `<div class="lifecycle-row ${stageClass}" data-event-id="${id}">
+        <span class="lifecycle-time">${time}</span>
+        <span class="lifecycle-stage">${evt.stage}</span>
+        <span>${evt.message}</span>
+    </div>`;
+}
+
+function renderPosition(position) {
+    const empty = position == null;
+    state.currentPosition = empty ? 0 : Number(position.quantity);
+    setText(dom.positionQty, empty ? "—" : state.currentPosition.toLocaleString());
+    setText(dom.positionAvg, empty ? "—" : formatPrice(position.averagePrice));
+    setMoney(dom.positionRealized, empty ? null : position.realizedPnl);
+    setMoney(dom.positionUnrealized, empty ? null : position.unrealizedPnl);
+    updateBuyButtonState();
+}
+
+function updateBuyButtonState() {
+    if (!dom.buyEsButton) return;
+
+    if (state.orderSubmitInFlight) {
+        dom.buyEsButton.disabled = true;
+        dom.buyEsButton.textContent = "SENDING BUY 100 ES...";
+        return;
+    }
+
+    if (isBuyLimitReached()) {
+        dom.buyEsButton.disabled = true;
+        dom.buyEsButton.textContent = `POSITION LIMIT ${state.maxPosition.toLocaleString()}`;
+        return;
+    }
+
+    dom.buyEsButton.disabled = false;
+    dom.buyEsButton.textContent = "BUY 100 ES @ MKT";
+}
+
+function isBuyLimitReached() {
+    return state.currentPosition + state.manualOrderQuantity > state.maxPosition;
+}
+
+function renderOpenOrders(orders) {
+    if (!dom.openOrders) return;
+    if (!orders || orders.length === 0) {
+        dom.openOrders.textContent = "No open orders";
+        return;
+    }
+    dom.openOrders.innerHTML = orders.slice(0, 8).map((order) => `<div class="open-order-row">
+        <span>${order.symbol}</span>
+        <span>${order.side}</span>
+        <span>${Number(order.remainingQuantity).toLocaleString()} @ ${order.limitPrice == null ? "MKT" : formatPrice(order.limitPrice)}</span>
+        <span>${order.status}</span>
+        <button class="mini-action-button" type="button" data-cancel-order="${order.orderId}">Cancel</button>
+    </div>`).join("");
+    dom.openOrders.querySelectorAll("[data-cancel-order]").forEach((button) => {
+        button.addEventListener("click", () => cancelOrder(button.dataset.cancelOrder));
+    });
+}
+
+async function cancelOrder(orderId) {
+    const response = await fetch(`/api/orders/${orderId}`, { method: "DELETE" });
+    if (response.ok || response.status === 409) renderOrderResult(await response.json());
+    await refreshTradingPanels();
+}
+
+function renderExecutionStats(stats, latency) {
+    if (!stats) return;
+    setText(dom.execOrdersSent, Number(stats.ordersSent).toLocaleString());
+    setText(dom.execOrdersFilled, Number(stats.ordersFilled).toLocaleString());
+    setText(dom.execCancels, Number(stats.cancels).toLocaleString());
+    setText(dom.execFillRatio, `${Number(stats.fillRatio).toFixed(0)}%`);
+    setMoney(dom.execPnl, stats.pnl);
+    if (!latency) return;
+    setText(dom.latTotal, `${Number(latency.totalMs).toFixed(1)}ms`);
+    setText(dom.latRisk, `${Number(latency.riskCheckMs).toFixed(1)}ms`);
+    setText(dom.latRoute, `${Number(latency.routeMs).toFixed(1)}ms`);
+    setText(dom.latExchange, `${Number(latency.exchangeMs).toFixed(1)}ms`);
+    setText(dom.latFill, `${Number(latency.fillMs).toFixed(1)}ms`);
+    setText(dom.latOther, `${Number(latency.otherMs).toFixed(1)}ms`);
+}
+
+function renderMarketMakerState(mm) {
+    if (!mm) return;
+    setText(dom.mmInventory, Number(mm.inventory).toLocaleString());
+    setText(dom.mmInventoryLimit, Number(mm.inventoryLimit).toLocaleString());
+    setText(dom.mmStatus, mm.status);
+    setText(dom.mmQuotes, `${mm.bidEnabled ? "BID" : "—"}/${mm.askEnabled ? "ASK" : "—"}`);
+    const statusClass = Math.abs(Number(mm.inventory)) >= Number(mm.inventoryLimit) ? "danger" : Math.abs(Number(mm.inventory)) >= 30 ? "warning" : "";
+    dom.mmStatus?.classList.toggle("danger", statusClass === "danger");
+    dom.mmStatus?.classList.toggle("warning", statusClass === "warning");
+}
+
+function setText(el, text) {
+    if (el) el.textContent = text;
+}
+
+function setMoney(el, value) {
+    if (!el) return;
+    if (value == null) {
+        el.textContent = "—";
+        el.classList.remove("positive", "negative");
+        return;
+    }
+    const amount = Number(value);
+    el.textContent = `${amount < 0 ? "-$" : "$"}${Math.abs(amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    el.classList.toggle("positive", amount > 0);
+    el.classList.toggle("negative", amount < 0);
+}
+
+refreshTradingPanels();
+setInterval(refreshTradingPanels, 2000);
 
 // ── System Metrics ──
 const updateSystemMetrics = async () => {

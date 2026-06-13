@@ -55,68 +55,85 @@
                 <div class="signal-feed" id="signalFeed"></div>
             </section>
 
-            <!-- Order Flow Heatmap -->
-            <section class="panel order-flow-panel">
-                <div class="panel-title">Top 8 ORDER FLOW</div>
-                <div class="order-flow" id="orderFlow"></div>
-            </section>
-
-            <!-- Stats Panel -->
-            <section class="panel throughput-panel">
-                <div class="panel-title">SERVER METRICS</div>
-                <div class="stats-grid">
-                    <div class="stat-item">
-                        <div class="stat-label">PROCESSED</div>
-                        <div class="stat-value" id="statProcessed">0</div>
+            <!-- Order Entry -->
+            <section class="panel order-ticket-panel">
+                <div class="panel-title">ORDER ENTRY</div>
+                <div class="order-ticket">
+                    <button class="order-submit buy" id="buyEsButton" type="button">BUY 100 ES @ MKT</button>
+                    <label class="market-maker-toggle">
+                        <input id="marketMakerToggle" type="checkbox">
+                        <span>Enable Market Maker Liquidity</span>
+                    </label>
+                    <div class="mm-risk-summary">
+                        <div><span>MM Inventory:</span><strong id="mmInventory">0</strong></div>
+                        <div><span>MM Quote Limit:</span><strong id="mmInventoryLimit">100</strong></div>
+                        <div><span>Status:</span><strong id="mmStatus">NORMAL</strong></div>
+                        <div><span>Quotes:</span><strong id="mmQuotes">BID/ASK</strong></div>
                     </div>
-                    <div class="stat-item">
-                        <div class="stat-label">DROPPED</div>
-                        <div class="stat-value stat-warn" id="statDropped">0</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-label">QUEUE DEPTH</div>
-                        <div class="stat-value" id="statQueueDepth">0</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-label">EVENT RATE / SEC</div>
-                        <div class="stat-value stat-warn" id="statServerRate">0</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-label">SNAPSHOTS / SEC</div>
-                        <div class="stat-value" id="statSnapshotsPerSec">0</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-label">EVENT COUNT</div>
-                        <div class="stat-value" id="statServerTotal">0</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-label">COALESCED / SEC</div>
-                        <div class="stat-value" id="statCoalescedPerSec">0</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-label">CPU USAGE</div>
-                        <div class="stat-value" id="statCpuUsage">0%</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-label">MEMORY</div>
-                        <div class="stat-value" id="statMemoryUsage">0 MB</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-label">WORKING SET</div>
-                        <div class="stat-value" id="statWorkingSet">0 MB</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-label">THREADS</div>
-                        <div class="stat-value" id="statThreadCount">0</div>
+                    <div class="position-summary">
+                        <div class="position-row"><span>Position:</span><strong id="positionQty">—</strong></div>
+                        <div class="position-row"><span>Avg Price:</span><strong id="positionAvg">—</strong></div>
+                        <div class="position-row"><span>Realized:</span><strong id="positionRealized">—</strong></div>
+                        <div class="position-row"><span>Unrealized:</span><strong id="positionUnrealized">—</strong></div>
                     </div>
                 </div>
             </section>
 
-            <!-- Event Rate Graph -->
-            <section class="panel rate-graph-panel">
-                <div class="panel-title">SERVER EVENT RATE (msg/s)</div>
-                <canvas id="rateGraph"></canvas>
-                <div class="rate-time-axis" id="rateTimeAxis"></div>
+            <!-- Depth of Market -->
+            <section class="panel depth-panel">
+                <div class="panel-title">DEPTH OF MARKET <span id="avgFillBadge">FILL AVG —</span></div>
+                <div class="consumed-liquidity" id="consumedLiquidity">Recent consumed: —</div>
+                <div class="depth-book" id="depthBook"></div>
+            </section>
+
+            <!-- Server Metrics -->
+            <section class="panel throughput-panel">
+                <div class="panel-title">SERVER METRICS</div>
+                <div class="stats-grid compact">
+                    <div class="stat-item"><div class="stat-label">PROCESSED</div><div class="stat-value" id="statProcessed">0</div></div>
+                    <div class="stat-item"><div class="stat-label">DROPPED</div><div class="stat-value stat-warn" id="statDropped">0</div></div>
+                    <div class="stat-item"><div class="stat-label">QUEUE</div><div class="stat-value" id="statQueueDepth">0</div></div>
+                    <div class="stat-item"><div class="stat-label">RATE</div><div class="stat-value stat-warn" id="statServerRate">0</div></div>
+                    <div class="stat-item"><div class="stat-label">SNAPS</div><div class="stat-value" id="statSnapshotsPerSec">0</div></div>
+                    <div class="stat-item"><div class="stat-label">EVENTS</div><div class="stat-value" id="statServerTotal">0</div></div>
+                    <div class="stat-item"><div class="stat-label">COAL/s</div><div class="stat-value" id="statCoalescedPerSec">0</div></div>
+                    <div class="stat-item"><div class="stat-label">CPU</div><div class="stat-value" id="statCpuUsage">0%</div></div>
+                    <div class="stat-item"><div class="stat-label">MEM</div><div class="stat-value" id="statMemoryUsage">0 MB</div></div>
+                    <div class="stat-item"><div class="stat-label">SET</div><div class="stat-value" id="statWorkingSet">0 MB</div></div>
+                    <div class="stat-item"><div class="stat-label">THR</div><div class="stat-value" id="statThreadCount">0</div></div>
+                </div>
+            </section>
+
+            <!-- Order Lifecycle -->
+            <section class="panel lifecycle-panel">
+                <div class="panel-title">ORDER LIFECYCLE</div>
+                <div class="lifecycle-log" id="orderLifecycle">
+                    <div class="lifecycle-row muted">Ready — submit BUY 100 ES @ MKT</div>
+                </div>
+            </section>
+
+            <!-- Open Orders -->
+            <section class="panel open-orders-panel">
+                <div class="panel-title">OPEN ORDERS</div>
+                <div class="open-orders" id="openOrders">No open orders</div>
+            </section>
+
+            <!-- Execution Stats -->
+            <section class="panel execution-stats-panel">
+                <div class="panel-title">EXECUTION STATS</div>
+                <div class="exec-stats-grid">
+                    <div><span>Orders Sent</span><strong id="execOrdersSent">0</strong></div>
+                    <div><span>Filled</span><strong id="execOrdersFilled">0</strong></div>
+                    <div><span>Cancels</span><strong id="execCancels">0</strong></div>
+                    <div><span>Fill Ratio</span><strong id="execFillRatio">0%</strong></div>
+                    <div><span>PnL</span><strong id="execPnl">$0</strong></div>
+                    <div><span>Total</span><strong id="latTotal">0ms</strong></div>
+                    <div><span>Risk</span><strong id="latRisk">0ms</strong></div>
+                    <div><span>Route</span><strong id="latRoute">0ms</strong></div>
+                    <div><span>Exchange</span><strong id="latExchange">0ms</strong></div>
+                    <div><span>Fill</span><strong id="latFill">0ms</strong></div>
+                    <div><span>Other</span><strong id="latOther">0ms</strong></div>
+                </div>
             </section>
         </div>
     </div>

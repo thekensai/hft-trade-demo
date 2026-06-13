@@ -1,5 +1,6 @@
 using TradeDemo.Api.Hubs;
 using TradeDemo.Api.Journal;
+using TradeDemo.Api.Models;
 using TradeDemo.Api.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -17,6 +18,9 @@ builder.Services.AddSingleton<PerformanceMetrics>();
 builder.Services.AddSingleton<GenerationStats>();
 builder.Services.AddTickJournal(builder.Configuration);
 builder.Services.AddSingleton<TickSequencer>();
+builder.Services.AddSingleton<RiskEngine>();
+builder.Services.AddSingleton<PositionManager>();
+builder.Services.AddSingleton<ExchangeSimulator>();
 builder.Services.AddSingleton<LosslessTickStore>();
 builder.Services.AddSingleton<MarketDataSimulator>();
 builder.Services.AddSingleton<TradeQueueProcessor>();
@@ -69,6 +73,50 @@ app.MapGet("/api/ticks/from/{sequenceId:long}", (LosslessTickStore tickStore, lo
 app.MapGet("/api/ticks/stats", (LosslessTickStore tickStore) => Results.Ok(tickStore.GetStats()));
 
 app.MapGet("/api/system/metrics", (PerformanceMetrics metrics) => Results.Ok(metrics.GetSnapshot()));
+
+// ── Order Flow Endpoints ──
+
+app.MapPost("/api/orders", async (Order order, ExchangeSimulator exchange, CancellationToken ct) =>
+{
+    var result = await exchange.SubmitOrderAsync(order, ct);
+    return Results.Ok(result);
+});
+
+app.MapGet("/api/orders", (ExchangeSimulator exchange) => Results.Ok(exchange.GetOrders()));
+
+app.MapGet("/api/orders/open", (ExchangeSimulator exchange) => Results.Ok(exchange.GetOpenOrders()));
+
+app.MapDelete("/api/orders/{orderId:guid}", (ExchangeSimulator exchange, Guid orderId) =>
+{
+    var result = exchange.CancelOrder(orderId);
+    if (result is null)
+    {
+        return Results.NotFound();
+    }
+
+    return result.Order.Status == "Canceled" ? Results.Ok(result) : Results.Conflict(result);
+});
+
+app.MapPut("/api/orders/{orderId:guid}", async (ExchangeSimulator exchange, Guid orderId, ModifyOrderRequest request, CancellationToken ct) =>
+{
+    var result = await exchange.ModifyOrderAsync(orderId, request, ct);
+    if (result is null)
+    {
+        return Results.NotFound();
+    }
+
+    return result.ExecutionReports.Any(r => r.Status == "ModifyRejected") ? Results.Conflict(result) : Results.Ok(result);
+});
+
+app.MapGet("/api/executions", (ExchangeSimulator exchange) => Results.Ok(exchange.GetExecutions()));
+
+app.MapGet("/api/execution-stats", (ExchangeSimulator exchange) => Results.Ok(exchange.GetExecutionStats()));
+
+app.MapGet("/api/market-maker/state", (ExchangeSimulator exchange) => Results.Ok(exchange.GetMarketMakerState()));
+
+app.MapGet("/api/depth/{symbol}", (ExchangeSimulator exchange, string symbol) => Results.Ok(exchange.GetDepth(symbol)));
+
+app.MapGet("/api/positions", (PositionManager positions) => Results.Ok(positions.GetPositions()));
 
 // ── Replay Engine Endpoints ──
 
