@@ -44,12 +44,11 @@ public sealed class ExchangeSimulator
 
         AddLifecycle(lifecycle, order, "Submitted", $"Order Submitted {order.Side} {order.Quantity:N0} {order.Symbol} @ {FormatOrderPrice(order)}");
 
-        var riskStart = sw.Elapsed.TotalMilliseconds;
         await Task.Delay(SimulatedHop, ct);
         var referencePrice = order.Side.Equals("BUY", StringComparison.OrdinalIgnoreCase) ? preTradeDepth.BestAsk : preTradeDepth.BestBid;
         var currentPosition = _positionManager.GetPosition(order.Symbol)?.Quantity ?? 0;
         var risk = _riskEngine.Check(order, referencePrice, currentPosition);
-        riskMs = sw.Elapsed.TotalMilliseconds - riskStart;
+        riskMs = SimulatedLatency(order.OrderId, 1, 0.4, 1.2);
         if (!risk.IsAccepted)
         {
             var rejected = order with
@@ -61,22 +60,20 @@ public sealed class ExchangeSimulator
             };
             AddLifecycle(lifecycle, rejected, "Rejected", risk.RejectReason ?? "Risk check rejected order");
             reports.Add(NewReport(rejected, "Rejected", risk.RejectReason ?? "Risk check rejected order"));
-            var rejectedLatency = BuildLatency(riskMs, routeMs, exchangeMs, fillMs, sw.Elapsed.TotalMilliseconds);
+            var rejectedLatency = BuildLatency(order.OrderId, riskMs, routeMs, exchangeMs, fillMs);
             Save(rejected, reports, lifecycle, sw.Elapsed.TotalMilliseconds);
             return BuildResult(rejected, reports, fills, position, lifecycle, preTradeDepth, rejectedLatency);
         }
 
         AddLifecycle(lifecycle, order, "Risk Check Passed", $"Risk Check Passed ({riskMs:F1}ms)");
 
-        var routeStart = sw.Elapsed.TotalMilliseconds;
         await Task.Delay(SimulatedHop, ct);
-        routeMs = sw.Elapsed.TotalMilliseconds - routeStart;
+        routeMs = SimulatedLatency(order.OrderId, 2, 1.4, 3.2);
 
         AddLifecycle(lifecycle, order, "Routed", $"Routed to {RouteFor(order.Symbol)} ({routeMs:F1}ms)");
 
-        var exchangeStart = sw.Elapsed.TotalMilliseconds;
         await Task.Delay(SimulatedHop, ct);
-        exchangeMs = sw.Elapsed.TotalMilliseconds - exchangeStart;
+        exchangeMs = SimulatedLatency(order.OrderId, 3, 3.5, 9.5);
 
         var accepted = order with
         {
@@ -95,12 +92,11 @@ public sealed class ExchangeSimulator
             var working = accepted with { Status = "Working", UpdatedAt = DateTime.UtcNow };
             AddLifecycle(lifecycle, working, "Working", $"Resting {working.Side} {working.RemainingQuantity:N0} {working.Symbol} @ {FormatOrderPrice(working)}");
             reports.Add(NewReport(working, "Working", "Order resting in open-orders book"));
-            var workingLatency = BuildLatency(riskMs, routeMs, exchangeMs, fillMs, sw.Elapsed.TotalMilliseconds);
+            var workingLatency = BuildLatency(order.OrderId, riskMs, routeMs, exchangeMs, fillMs);
             Save(working, reports[^1], lifecycle.Last(), sw.Elapsed.TotalMilliseconds);
             return BuildResult(working, reports, fills, position, lifecycle, preTradeDepth, workingLatency);
         }
 
-        var fillStart = sw.Elapsed.TotalMilliseconds;
         var fillResult = FillAgainstDepth(accepted, lifecycle, reports, fills);
         if (fills.Count > 0)
         {
@@ -111,7 +107,7 @@ public sealed class ExchangeSimulator
             ApplyMarketMakerInventory(fill);
             await Task.Delay(SimulatedHop, ct);
         }
-        fillMs = sw.Elapsed.TotalMilliseconds - fillStart;
+        fillMs = SimulatedLatency(order.OrderId, 4, 18.0, 55.0);
 
         var filledOrder = accepted with
         {
@@ -127,9 +123,9 @@ public sealed class ExchangeSimulator
             lifecycle,
             filledOrder,
             filledOrder.Status,
-            filledOrder.Status == "Filled" ? $"Filled ({fillMs:F1}ms)" : $"Working {filledOrder.RemainingQuantity:N0} remaining");
+            filledOrder.Status == "Filled" ? $"Order Fully Filled ({fillMs:F1}ms)" : $"Working {filledOrder.RemainingQuantity:N0} remaining");
         reports.Add(NewReport(filledOrder, filledOrder.Status, lifecycle[^1].Message, null, filledOrder.FilledQuantity, filledOrder.RemainingQuantity, filledOrder.AverageFillPrice));
-        var latency = BuildLatency(riskMs, routeMs, exchangeMs, fillMs, sw.Elapsed.TotalMilliseconds);
+        var latency = BuildLatency(order.OrderId, riskMs, routeMs, exchangeMs, fillMs);
         Save(filledOrder, reports[^1], lifecycle.Last(), sw.Elapsed.TotalMilliseconds);
 
         var depth = GetDepth(filledOrder.Symbol);
@@ -370,6 +366,7 @@ public sealed class ExchangeSimulator
                 }
 
                 var fillOwner = useMarketMaker ? "MarketMaker" : order.Owner;
+                book.Sequence++;
                 var fill = new Fill(Guid.NewGuid(), order.OrderId, order.Symbol, order.Side, quantity, level.Price, DateTime.UtcNow, fillOwner);
                 fills.Add(fill);
                 remaining -= quantity;
@@ -466,9 +463,7 @@ public sealed class ExchangeSimulator
 
     private DepthSnapshot GetDepthUnsafe(string symbol)
     {
-        var book = GetDepthBookUnsafe(symbol);
-        TickDepthUnsafe(book);
-        var snapshot = ToDepthSnapshot(book);
+        var snapshot = ToDepthSnapshot(GetDepthBookUnsafe(symbol));
         _positionManager.UpdateMark(snapshot.Symbol, snapshot.MidPrice);
         return snapshot;
     }
@@ -573,7 +568,8 @@ public sealed class ExchangeSimulator
         BestAsk: book.Asks.Count > 0 ? book.Asks[0].Price : book.MidPrice + book.TickSize,
         Bids: book.Bids.ToArray(),
         Asks: book.Asks.ToArray(),
-        Timestamp: DateTime.UtcNow);
+        Timestamp: DateTime.UtcNow,
+        Sequence: book.Sequence);
 
     private void Save(Order order, IReadOnlyList<ExecutionReport> reports, IReadOnlyList<OrderLifecycleEvent> lifecycle, double? latencyMs = null)
     {
@@ -643,10 +639,17 @@ public sealed class ExchangeSimulator
     private static OrderLifecycleEvent NewLifecycle(Order order, string stage, string message, int? quantity = null, decimal? price = null) =>
         new(Guid.NewGuid(), order.OrderId, stage, message, DateTime.UtcNow, quantity, price);
 
-    private static LatencyBreakdown BuildLatency(double riskMs, double routeMs, double exchangeMs, double fillMs, double totalMs)
+    private static LatencyBreakdown BuildLatency(Guid orderId, double riskMs, double routeMs, double exchangeMs, double fillMs)
     {
-        var otherMs = Math.Max(0, totalMs - riskMs - routeMs - exchangeMs - fillMs);
-        return new LatencyBreakdown(riskMs, routeMs, exchangeMs, fillMs, otherMs, totalMs);
+        var otherMs = SimulatedLatency(orderId, 5, 0.3, 2.4);
+        return new LatencyBreakdown(riskMs, routeMs, exchangeMs, fillMs, otherMs, riskMs + routeMs + exchangeMs + fillMs + otherMs);
+    }
+
+    private static double SimulatedLatency(Guid orderId, int stage, double minMs, double maxMs)
+    {
+        var hash = HashCode.Combine(orderId, stage);
+        var unit = (hash & 0x7fffffff) / (double)int.MaxValue;
+        return minMs + unit * (maxMs - minMs);
     }
 
     private static ExecutionReport NewReport(Order order, string status, string message, Fill? fill = null, int cumQuantity = 0, int leavesQuantity = 0, decimal? averageFillPrice = null) => new(
@@ -723,5 +726,6 @@ public sealed class ExchangeSimulator
     {
         public decimal MidPrice { get; set; } = GetReferencePrice(Symbol);
         public long TickCount { get; set; }
+        public long Sequence { get; set; }
     }
 }

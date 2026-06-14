@@ -79,6 +79,7 @@ const dom = {
     depthBook: document.getElementById("depthBook"),
     consumedLiquidity: document.getElementById("consumedLiquidity"),
     avgFillBadge: document.getElementById("avgFillBadge"),
+    matchingModelBadge: document.getElementById("matchingModelBadge"),
     positionQty: document.getElementById("positionQty"),
     positionAvg: document.getElementById("positionAvg"),
     positionRealized: document.getElementById("positionRealized"),
@@ -90,7 +91,9 @@ const dom = {
     execCancels: document.getElementById("execCancels"),
     execFillRatio: document.getElementById("execFillRatio"),
     execPnl: document.getElementById("execPnl"),
+    markMid: document.getElementById("markMid"),
     slipArrival: document.getElementById("slipArrival"),
+    slipAvgFill: document.getElementById("slipAvgFill"),
     slipValue: document.getElementById("slipValue"),
     latTotal: document.getElementById("latTotal"),
     latRisk: document.getElementById("latRisk"),
@@ -605,6 +608,10 @@ function formatPrice(price) {
     return Number(price).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+function formatTradePrice(price) {
+    return Number(price).toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 });
+}
+
 function formatVolume(vol) {
     if (vol >= 1000) return (vol / 1000).toFixed(1) + "K";
     return String(vol);
@@ -765,7 +772,9 @@ function resetDemoUi() {
 }
 
 function resetSlippageStats() {
+    setText(dom.markMid, "—");
     setText(dom.slipArrival, "—");
+    setText(dom.slipAvgFill, "—");
     setText(dom.slipValue, "—");
     dom.slipValue?.classList.remove("positive", "negative");
 }
@@ -866,6 +875,8 @@ function renderDepth(depth, fills = []) {
     const bidRows = (depth.bids ?? []).map((level) => depthRow(level, "bid", consumed));
     dom.depthBook.innerHTML = [...askRows, midRow, ...bidRows].join("");
     setText(dom.avgFillBadge, `FILL AVG ${formatPrice(weightedAverageFill() ?? depth.midPrice)}`);
+    setText(dom.matchingModelBadge, `FIFO PRICE-TIME · BOOK ${Number(depth.sequence ?? 0).toLocaleString()}`);
+    setText(dom.markMid, formatTradePrice(depth.midPrice));
 }
 
 function appendConsumedFills(fills) {
@@ -873,10 +884,10 @@ function appendConsumedFills(fills) {
         const id = fill.fillId ?? `${fill.orderId}-${fill.price}-${fill.quantity}-${fill.timestamp}`;
         if (state.consumedFillIds.has(id)) continue;
         state.consumedFillIds.add(id);
-        state.lastConsumedFills.unshift(fill);
+        state.lastConsumedFills.push(fill);
     }
 
-    state.lastConsumedFills = state.lastConsumedFills.slice(0, state.maxConsumedFills);
+    state.lastConsumedFills = state.lastConsumedFills.slice(-state.maxConsumedFills);
     state.consumedFillIds = new Set(state.lastConsumedFills.map((fill) => fill.fillId ?? `${fill.orderId}-${fill.price}-${fill.quantity}-${fill.timestamp}`));
 }
 
@@ -914,7 +925,10 @@ function renderConsumedLiquidity(consumed) {
     }
 
     const total = state.lastConsumedFills.reduce((sum, fill) => sum + Number(fill.quantity), 0);
-    const byPrice = Array.from(consumed.entries()).map(([price, qty]) => `${qty} @ ${price}`).join(", ");
+    const byPrice = Array.from(consumed.entries())
+        .sort(([left], [right]) => Number(left) - Number(right))
+        .map(([price, qty]) => `${qty} @ ${price}`)
+        .join(", ");
     dom.consumedLiquidity.textContent = `Recent consumed: ${total} total (${byPrice})`;
 }
 
@@ -959,7 +973,7 @@ function renderPosition(position) {
     const empty = position == null;
     state.currentPosition = empty ? 0 : Number(position.quantity);
     setText(dom.positionQty, empty ? "—" : state.currentPosition.toLocaleString());
-    setText(dom.positionAvg, empty ? "—" : formatPrice(position.averagePrice));
+    setText(dom.positionAvg, empty ? "—" : formatTradePrice(position.averagePrice));
     setMoney(dom.positionRealized, empty ? null : position.realizedPnl);
     setMoney(dom.positionUnrealized, empty ? null : position.unrealizedPnl);
     updateBuyButtonState();
@@ -1002,7 +1016,7 @@ function renderRecentOrders(orders) {
     }
     dom.openOrders.innerHTML = orders.slice(0, 8).map((order) => {
         const quantity = Number(order.filledQuantity || order.quantity).toLocaleString();
-        const price = order.averageFillPrice == null ? formatOrderPrice(order) : `avg ${formatPrice(order.averageFillPrice)}`;
+        const price = order.averageFillPrice == null ? formatOrderPrice(order) : `avg ${formatTradePrice(order.averageFillPrice)}`;
         const action = isOpenOrder(order)
             ? `<button class="mini-action-button" type="button" data-cancel-order="${order.orderId}">Cancel</button>`
             : `<span></span>`;
@@ -1043,8 +1057,9 @@ function renderSlippageStats(slippage) {
 
     const points = Number(state.latestSlippage.slippagePoints);
     const dollars = Number(state.latestSlippage.slippageDollars);
-    setText(dom.slipArrival, formatPrice(state.latestSlippage.arrivalPrice));
-    setText(dom.slipValue, `${points >= 0 ? "+" : ""}${points.toFixed(2)} pts / ${dollars < 0 ? "-$" : "+$"}${Math.abs(dollars).toLocaleString(undefined, { maximumFractionDigits: 0 })}`);
+    setText(dom.slipArrival, formatTradePrice(state.latestSlippage.arrivalPrice));
+    setText(dom.slipAvgFill, formatTradePrice(state.latestSlippage.averageFillPrice));
+    setText(dom.slipValue, `${points >= 0 ? "+" : ""}${points.toFixed(4)} pts / ${dollars < 0 ? "-$" : "+$"}${Math.abs(dollars).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
     dom.slipValue?.classList.toggle("negative", points > 0);
     dom.slipValue?.classList.toggle("positive", points < 0);
 }

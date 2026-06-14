@@ -77,14 +77,14 @@
                         <div class="position-row"><span>Position:</span><strong id="positionQty">—</strong></div>
                         <div class="position-row"><span>Avg Price:</span><strong id="positionAvg">—</strong></div>
                         <div class="position-row"><span>Realized:</span><strong id="positionRealized">—</strong></div>
-                        <div class="position-row"><span>Unrealized:</span><strong id="positionUnrealized">—</strong></div>
+                        <div class="position-row"><span>Unrealized vs Mid:</span><strong id="positionUnrealized">—</strong></div>
                     </div>
                 </div>
             </section>
 
             <!-- Depth of Market -->
             <section class="panel depth-panel">
-                <div class="panel-title">DEPTH OF MARKET <span id="avgFillBadge">FILL AVG —</span></div>
+                <div class="panel-title">DEPTH OF MARKET <span id="matchingModelBadge">FIFO PRICE-TIME</span><span id="avgFillBadge">FILL AVG —</span></div>
                 <div class="consumed-liquidity" id="consumedLiquidity">Recent consumed: —</div>
                 <div class="depth-book" id="depthBook"></div>
             </section>
@@ -136,8 +136,10 @@
                     <div><span>Filled</span><strong id="execOrdersFilled">0</strong></div>
                     <div><span>Cancels</span><strong id="execCancels">0</strong></div>
                     <div><span>Fill Ratio</span><strong id="execFillRatio">0%</strong></div>
-                    <div><span>PnL</span><strong id="execPnl">$0</strong></div>
+                    <div><span>MTM PnL</span><strong id="execPnl">$0</strong></div>
+                    <div><span>Mark Mid</span><strong id="markMid">—</strong></div>
                     <div><span>Arrival</span><strong id="slipArrival">—</strong></div>
+                    <div><span>Avg Fill</span><strong id="slipAvgFill">—</strong></div>
                     <div><span>Slippage</span><strong id="slipValue">—</strong></div>
                     <div><span>Total</span><strong id="latTotal">0ms</strong></div>
                     <div><span>Risk</span><strong id="latRisk">0ms</strong></div>

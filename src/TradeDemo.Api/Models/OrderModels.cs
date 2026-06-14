@@ -76,7 +76,8 @@ public sealed record DepthSnapshot(
     decimal BestAsk,
     IReadOnlyList<DepthLevel> Bids,
     IReadOnlyList<DepthLevel> Asks,
-    DateTime Timestamp
+    DateTime Timestamp,
+    long Sequence
 );
 
 public sealed record ExecutionStats(

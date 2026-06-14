@@ -170,6 +170,32 @@ Journal replay sends historical ticks back into the UI pipeline without re-appen
 
 The order path is REST-driven and separate from the SignalR market-data stream.
 
+### Execution Flow
+
+The logical execution flow is:
+
+```text
+UI
+ ↓
+SignalR / REST API
+ ↓
+Order Gateway
+ ↓
+Risk Engine
+ ↓
+Matching Engine (FIFO Price-Time)
+ ↓
+Book Update Event
+ ↓
+Execution Report
+ ↓
+Position Service
+ ↓
+PnL Service
+```
+
+In the current implementation, these are logical boundaries rather than separate deployable services: the browser submits orders through `POST /api/orders`, `Program.cs` acts as the order gateway, `RiskEngine` performs pre-trade checks, `ExchangeSimulator` owns the stateful book/matching simulation and execution reports, and `PositionManager` derives position and mark-to-market PnL.
+
 ```text
 Browser Order Entry
     ↓ POST /api/orders
@@ -181,9 +207,9 @@ RiskEngine.Check
     ↓
 ExchangeSimulator stateful DOM
     ↓
-Partial Fill(s)
+Partial Fill(s) + book sequence update
     ↓
-PositionManager.ApplyFill
+PositionManager.ApplyFills
     ↓
 OrderResult returned to UI
 ```
