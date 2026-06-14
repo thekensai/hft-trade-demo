@@ -61,7 +61,8 @@ public sealed record OrderLifecycleEvent(
     string Message,
     DateTime Timestamp,
     int? Quantity = null,
-    decimal? Price = null
+    decimal? Price = null,
+    string? Symbol = null
 );
 
 public sealed record DepthLevel(
@@ -95,6 +96,18 @@ public sealed record ExecutionStats(
     DateTime UpdatedAt
 );
 
+public sealed record TradeMonitorRow(
+    Guid OrderId,
+    string Symbol,
+    string Status,
+    string Venue,
+    double? LatencyMs,
+    double FillPercent,
+    decimal PnL,
+    string Health,
+    DateTime UpdatedAt
+);
+
 public sealed record LatencyBreakdown(
     double RiskCheckMs,
     double RouteMs,
@@ -108,7 +121,8 @@ public sealed record SlippageMetrics(
     decimal ArrivalPrice,
     decimal AverageFillPrice,
     decimal SlippagePoints,
-    decimal SlippageDollars
+    decimal SlippageDollars,
+    string Symbol
 );
 
 public sealed record MarketMakerState(

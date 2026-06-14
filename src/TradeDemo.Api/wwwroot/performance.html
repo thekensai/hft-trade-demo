@@ -7,7 +7,7 @@
     <link rel="stylesheet" href="css/shared.css">
     <style>
         .perf-dashboard { margin-top: 24px; }
-        .latency-section { margin-bottom: 32px; }
+        .latency-section { margin-bottom: 24px; }
         .latency-bar-container { display: flex; align-items: center; gap: 12px; margin: 6px 0; }
         .latency-label { width: 60px; font-size: 11px; color: var(--text-muted); }
         .latency-bar { height: 20px; background: var(--bg-secondary); border-radius: 3px; flex: 1; position: relative; overflow: hidden; }
@@ -15,17 +15,41 @@
         .latency-bar-fill.p50 { background: var(--green); }
         .latency-bar-fill.p95 { background: var(--yellow); }
         .latency-bar-fill.p99 { background: var(--red); }
+        .latency-bar-fill.slo-pass { background: var(--green); }
+        .latency-bar-fill.slo-warn { background: var(--yellow); }
+        .latency-bar-fill.slo-fail { background: var(--red); }
         .latency-value { width: 100px; font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }
+        .latency-slo { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-left: auto; font-size: 11px; font-weight: 400; color: var(--text-muted); }
+        .slo-pill { border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px; background: var(--bg-panel); }
+        .slo-pill.pass { color: var(--green); border-color: var(--green-dim); }
+        .slo-pill.warn { color: var(--yellow); border-color: rgba(245, 158, 11, 0.35); }
+        .slo-pill.fail { color: var(--red); border-color: var(--red-dim); }
         .gc-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 16px 0; }
         .gc-card { background: var(--bg-panel); border: 1px solid var(--border); border-radius: 6px; padding: 12px; text-align: center; }
         .gc-gen { font-size: 10px; color: var(--text-muted); letter-spacing: 1px; }
         .gc-count { font-size: 20px; font-weight: 700; color: var(--text-primary); margin: 4px 0; font-variant-numeric: tabular-nums; }
         .gc-delta { font-size: 11px; color: var(--yellow); }
+        .metric-card-note { font-size: 11px; color: var(--text-muted); margin-top: 6px; line-height: 1.4; }
         .live-indicator { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--green); }
         .live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: blink 1s infinite; }
         @keyframes blink { 0%,100% { opacity:1; } 50% { opacity:0.3; } }
+        .trend-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 16px 0; }
+        .trend-card { background: var(--bg-panel); border: 1px solid var(--border); border-radius: 6px; padding: 14px; }
+        .trend-header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 10px; }
+        .trend-title { font-size: 11px; color: var(--text-muted); letter-spacing: 1px; }
+        .trend-value { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+        .trend-canvas { width: 100%; height: 76px; display: block; background: var(--bg-secondary); border-radius: 4px; }
+        .trend-scale { display: flex; justify-content: space-between; margin-top: 6px; font-size: 10px; color: var(--text-muted); }
         .alloc-bar { height: 8px; background: var(--bg-secondary); border-radius: 4px; margin: 8px 0; overflow: hidden; }
         .alloc-bar-fill { height: 100%; background: linear-gradient(90deg, var(--cyan), var(--purple)); transition: width 0.5s; }
+        .queue-occupancy { margin-top: 16px; }
+        .queue-occupancy-label { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted); }
+        .queue-occupancy-bar { height: 10px; background: var(--bg-secondary); border-radius: 5px; margin-top: 8px; overflow: hidden; }
+        .queue-occupancy-fill { height: 100%; background: linear-gradient(90deg, var(--green), var(--yellow)); transition: width 0.5s; }
+        @media (max-width: 800px) {
+            .trend-grid { grid-template-columns: 1fr; }
+            .gc-grid { grid-template-columns: 1fr; }
+        }
     </style>
 </head>
 <body>
@@ -41,27 +65,31 @@
     </nav>
 
     <div class="page-content">
-        <h1 class="page-title">Performance Engineering</h1>
-        <p class="page-subtitle">Real-time p50/p95/p99 latency, GC behavior, allocation rate, and throughput metrics — updated every second</p>
+        <p class="page-subtitle">Runtime SLO dashboard: handler p50/p95/p99 latency, GC pause cost, allocation pressure, client update throughput, and queue backpressure — updated every second</p>
 
         <!-- ── Why This Matters ── -->
         <div class="section">
-            <h2 class="section-title">Why These Metrics Matter in Trading</h2>
             <div class="section-body">
-                <p>In high-frequency trading systems, <strong>tail latency kills</strong>. A system that averages 50μs but occasionally spikes to 50ms will miss fill opportunities. The metrics below are what SIG/Optiver/Jane Street infrastructure teams monitor in production:</p>
                 <ul class="feature-list">
-                    <li><strong>p50 (median):</strong> Typical processing time — your baseline experience</li>
-                    <li><strong>p95:</strong> The "busy period" latency — what happens during market opens</li>
-                    <li><strong>p99:</strong> The real danger zone — if this is high, you're dropping messages</li>
-                    <li><strong>GC pauses:</strong> .NET's garbage collector can introduce unpredictable stalls. Server GC + low-allocation patterns minimize this.</li>
-                    <li><strong>Allocation rate:</strong> High allocation rate → frequent GC → latency spikes. ArrayPool and Span&lt;T&gt; are the cure.</li>
+                    <li><strong>p50 (median):</strong> Typical handler processing time after an event is dequeued.</li>
+                    <li><strong>p95:</strong> The "busy period" handler latency — what happens during market opens.</li>
+                    <li><strong>p99:</strong> Handler tail-latency SLO target: <strong>&lt;20ms</strong>. Queue wait is tracked separately.</li>
+                    <li><strong>Peak:</strong> Maximum observed handler outlier. If it dwarfs p99, check GC activity and queue buildup.</li>
+                    <li><strong>GC pause %:</strong> Normalizes cumulative GC pause time against process uptime.</li>
+                    <li><strong>Queue depth:</strong> Event-driven latency usually starts as backpressure before it appears in p99.</li>
                 </ul>
             </div>
         </div>
 
         <!-- ── Live Latency Percentiles ── -->
         <div class="section">
-            <h2 class="section-title">Latency Percentiles (Live)</h2>
+            <h2 class="section-title">
+                <span>Handler Latency Percentiles (Live)</span>
+                <span class="latency-slo">
+                    <span class="slo-pill" id="p99Slo">Handler target: &lt;20ms</span>
+                    <span class="slo-pill" id="peakContext">Peak context: —</span>
+                </span>
+            </h2>
             <div class="latency-section">
                 <div class="latency-bar-container">
                     <span class="latency-label">p50</span>
@@ -86,16 +114,40 @@
             </div>
         </div>
 
+        <!-- ── Latency / Backpressure Trends ── -->
+        <div class="section">
+            <h2 class="section-title">Production Signals (Last 60s)</h2>
+            <div class="trend-grid">
+                <div class="trend-card">
+                    <div class="trend-header">
+                        <span class="trend-title">HANDLER P99 LATENCY TREND</span>
+                        <span class="trend-value" id="p99TrendValue">—</span>
+                    </div>
+                    <canvas class="trend-canvas" id="p99Trend" width="520" height="120"></canvas>
+                    <div class="trend-scale"><span>0ms</span><span id="p99TrendMax">20ms SLO</span></div>
+                </div>
+                <div class="trend-card">
+                    <div class="trend-header">
+                        <span class="trend-title">QUEUE DEPTH TREND</span>
+                        <span class="trend-value" id="queueTrendValue">—</span>
+                    </div>
+                    <canvas class="trend-canvas" id="queueTrend" width="520" height="120"></canvas>
+                    <div class="trend-scale"><span>0</span><span id="queueTrendMax">max —</span></div>
+                </div>
+            </div>
+        </div>
+
         <!-- ── Throughput ── -->
         <div class="section">
             <h2 class="section-title">Throughput</h2>
             <div class="metric-grid">
                 <div class="metric-card">
-                    <div class="metric-card-label">MESSAGES/SEC</div>
+                    <div class="metric-card-label">CLIENT UPDATES/SEC</div>
                     <div class="metric-card-value" id="msgPerSec">0</div>
+                    <div class="metric-card-note">SignalR/UI update rate, not raw market-data generation rate.</div>
                 </div>
                 <div class="metric-card">
-                    <div class="metric-card-label">TOTAL PROCESSED</div>
+                    <div class="metric-card-label">UI SNAPSHOTS SENT</div>
                     <div class="metric-card-value" id="totalMsgs">0</div>
                 </div>
                 <div class="metric-card">
@@ -110,11 +162,45 @@
             </div>
         </div>
 
+        <!-- ── Queue Backpressure ── -->
+        <div class="section">
+            <h2 class="section-title">Queue Backpressure</h2>
+            <div class="metric-grid">
+                <div class="metric-card">
+                    <div class="metric-card-label">QUEUE DEPTH</div>
+                    <div class="metric-card-value" id="queueDepth">0</div>
+                    <div class="metric-card-note">Pending events in the bounded 100,000-capacity OMS channel.</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-card-label">QUEUE OCCUPANCY</div>
+                    <div class="metric-card-value" id="queueOccupancy">0.0%</div>
+                    <div class="metric-card-note" id="queueOccupancyNote">0 / 100,000 capacity</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-card-label">UI SNAPSHOTS COALESCED</div>
+                    <div class="metric-card-value" id="droppedTotal">0</div>
+                    <div class="metric-card-note">Client/UI snapshots intentionally coalesced during bursts; market-data journal stays lossless.</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-card-label">LOSSLESS STORE QUEUE</div>
+                    <div class="metric-card-value" id="losslessQueueDepth">0</div>
+                    <div class="metric-card-note">Journal/replay path is separated from UI coalescing.</div>
+                </div>
+            </div>
+            <div class="queue-occupancy">
+                <div class="queue-occupancy-label">
+                    <span>QUEUE CAPACITY: 100,000</span>
+                    <span id="queueOccupancyScale">0.0% occupied / max 0.0%</span>
+                </div>
+                <div class="queue-occupancy-bar"><div class="queue-occupancy-fill" id="queueOccupancyBar" style="width:0%"></div></div>
+            </div>
+        </div>
+
         <!-- ── GC Metrics ── -->
         <div class="section">
             <h2 class="section-title">Garbage Collection</h2>
             <div class="section-body">
-                <p>Monitoring GC behavior is critical. Gen0 collections are cheap but frequent. Gen2 collections cause full STW (stop-the-world) pauses. This system uses <strong>ArrayPool&lt;T&gt;</strong> for percentile buffers and pre-allocated batch lists to minimize Gen0 pressure.</p>
+                <p>Gen0 collections are cheap but frequent. Gen2 collections cause full STW (stop-the-world) pauses. This system uses <strong>ArrayPool&lt;T&gt;</strong> for percentile buffers and pre-allocated batch lists to minimize Gen0 pressure.</p>
             </div>
             <div class="gc-grid">
                 <div class="gc-card">
@@ -140,13 +226,14 @@
                     <div class="metric-card-unit">MB</div>
                 </div>
                 <div class="metric-card">
-                    <div class="metric-card-label">GC PAUSE TIME</div>
-                    <div class="metric-card-value" id="gcPause">0</div>
-                    <div class="metric-card-unit">ms total</div>
+                    <div class="metric-card-label">GC PAUSE %</div>
+                    <div class="metric-card-value" id="gcPausePct">0</div>
+                    <div class="metric-card-unit" id="gcPauseUnit">0 ms total</div>
                 </div>
                 <div class="metric-card">
                     <div class="metric-card-label">LATENCY MODE</div>
                     <div class="metric-card-value" id="latencyMode" style="font-size:14px">—</div>
+                    <div class="metric-card-note" id="latencyModeNote">Demo workload mode reported by .NET GC.</div>
                 </div>
                 <div class="metric-card">
                     <div class="metric-card-label">SERVER GC</div>
@@ -163,97 +250,209 @@
             </div>
             <div style="margin-top:12px">
                 <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-muted)">
-                    <span>0 KB</span>
+                    <span>0</span>
                     <span id="allocLabel">0 KB/sec</span>
-                    <span>10 MB</span>
+                    <span id="allocScaleMax">10 MB/sec</span>
                 </div>
                 <div class="alloc-bar"><div class="alloc-bar-fill" id="allocBar" style="width:0%"></div></div>
-            </div>
-        </div>
-
-        <!-- ── What We Optimize ── -->
-        <div class="section">
-            <h2 class="section-title">Optimization Techniques Used</h2>
-            <div class="section-body">
-                <table class="data-table">
-                    <thead>
-                        <tr><th>TECHNIQUE</th><th>LOCATION</th><th>IMPACT</th></tr>
-                    </thead>
-                    <tbody>
-                        <tr>
-                            <td><strong>ArrayPool&lt;long&gt;.Shared.Rent()</strong></td>
-                            <td>PerformanceMetrics.GetSnapshot()</td>
-                            <td>Zero-allocation percentile computation</td>
-                        </tr>
-                        <tr>
-                            <td><strong>Pre-allocated List&lt;T&gt;(50)</strong></td>
-                            <td>TradeQueueProcessor batch buffer</td>
-                            <td>No resize allocations on hot path</td>
-                        </tr>
-                        <tr>
-                            <td><strong>Interlocked operations</strong></td>
-                            <td>All counters and stats</td>
-                            <td>Lock-free; no mutex contention</td>
-                        </tr>
-                        <tr>
-                            <td><strong>Circular buffer (power-of-2)</strong></td>
-                            <td>Latency sample storage (4096)</td>
-                            <td>Bitwise AND instead of modulo; cache-friendly</td>
-                        </tr>
-                        <tr>
-                            <td><strong>Stopwatch.GetTimestamp()</strong></td>
-                            <td>Latency measurement</td>
-                            <td>High-resolution; no DateTime allocation</td>
-                        </tr>
-                        <tr>
-                            <td><strong>Bounded DOM (60 rows)</strong></td>
-                            <td>Frontend signal feed</td>
-                            <td>Prevents DOM explosion under high msg rates</td>
-                        </tr>
-                    </tbody>
-                </table>
             </div>
         </div>
     </div>
 
     <script>
+        const P99_SLO_US = 20_000;
+        const QUEUE_CAPACITY = 100_000;
+        const HISTORY_LIMIT = 60;
+        const trendHistory = {
+            p99Us: [],
+            queueDepth: []
+        };
+        let lastGcPauseMs = 0;
+
         async function pollMetrics() {
             try {
-                const res = await fetch('/api/metrics');
-                const m = await res.json();
-                
-                const maxLatency = 5000; // 5000μs scale
-                document.getElementById('p50Bar').style.width = `${Math.min(m.p50LatencyUs/maxLatency*100, 100)}%`;
-                document.getElementById('p95Bar').style.width = `${Math.min(m.p95LatencyUs/maxLatency*100, 100)}%`;
-                document.getElementById('p99Bar').style.width = `${Math.min(m.p99LatencyUs/maxLatency*100, 100)}%`;
-                document.getElementById('peakBar').style.width = `${Math.min(m.peakLatencyUs/maxLatency*100, 100)}%`;
-                
-                document.getElementById('p50Value').textContent = `${m.p50LatencyUs.toFixed(1)} μs`;
-                document.getElementById('p95Value').textContent = `${m.p95LatencyUs.toFixed(1)} μs`;
-                document.getElementById('p99Value').textContent = `${m.p99LatencyUs.toFixed(1)} μs`;
-                document.getElementById('peakValue').textContent = `${m.peakLatencyUs.toFixed(1)} μs`;
-                
-                document.getElementById('msgPerSec').textContent = m.messagesPerSecond.toLocaleString();
-                document.getElementById('totalMsgs').textContent = m.totalMessages.toLocaleString();
-                document.getElementById('totalBytes').textContent = formatBytes(m.totalBytes);
-                document.getElementById('uptime').textContent = formatUptime(m.uptimeSeconds);
-                
-                document.getElementById('gen0Count').textContent = m.gen0Collections;
-                document.getElementById('gen1Count').textContent = m.gen1Collections;
-                document.getElementById('gen2Count').textContent = m.gen2Collections;
-                document.getElementById('gen0Delta').textContent = `+${m.gen0Delta} since last`;
-                document.getElementById('gen1Delta').textContent = `+${m.gen1Delta} since last`;
-                document.getElementById('gen2Delta').textContent = `+${m.gen2Delta} since last`;
-                
-                document.getElementById('heapSize').textContent = (m.heapSizeBytes / 1048576).toFixed(1);
-                document.getElementById('gcPause').textContent = m.gcPauseTimeMs.toFixed(1);
-                document.getElementById('latencyMode').textContent = m.latencyMode;
-                document.getElementById('serverGc').textContent = m.isServerGc ? 'YES' : 'NO';
-                
-                const allocKb = m.allocationRateBytes / 1024;
-                document.getElementById('allocLabel').textContent = `${formatBytes(m.allocationRateBytes)}/sec`;
-                document.getElementById('allocBar').style.width = `${Math.min(allocKb / 10240 * 100, 100)}%`;
+                const [metricsRes, queueRes] = await Promise.all([
+                    fetch('/api/metrics'),
+                    fetch('/api/queue/stats')
+                ]);
+                const m = await metricsRes.json();
+                const q = queueRes.ok ? await queueRes.json() : null;
+
+                updateLatency(m);
+                updateThroughput(m);
+                updateGc(m);
+                updateAllocation(m);
+                updateQueue(q);
+                updateTrends(m, q);
             } catch (e) { /* retry next interval */ }
+        }
+
+        function updateLatency(m) {
+            const maxLatency = Math.max(P99_SLO_US, m.peakLatencyUs || 0); // SLO-scaled, expands for outliers
+            document.getElementById('p50Bar').style.width = `${Math.min(m.p50LatencyUs/maxLatency*100, 100)}%`;
+            document.getElementById('p95Bar').style.width = `${Math.min(m.p95LatencyUs/maxLatency*100, 100)}%`;
+            const sloState = getSloState(m.p99LatencyUs);
+            const p99Bar = document.getElementById('p99Bar');
+            p99Bar.style.width = `${Math.min(m.p99LatencyUs/maxLatency*100, 100)}%`;
+            p99Bar.className = `latency-bar-fill slo-${sloState}`;
+            document.getElementById('peakBar').style.width = `${Math.min(m.peakLatencyUs/maxLatency*100, 100)}%`;
+
+            document.getElementById('p50Value').textContent = formatLatency(m.p50LatencyUs);
+            document.getElementById('p95Value').textContent = formatLatency(m.p95LatencyUs);
+            document.getElementById('p99Value').textContent = formatLatency(m.p99LatencyUs);
+            document.getElementById('peakValue').textContent = formatLatency(m.peakLatencyUs);
+
+            const p99Slo = document.getElementById('p99Slo');
+            const sloLabel = sloState === 'pass' ? 'meeting SLO' : sloState === 'warn' ? 'approaching SLO' : 'violating SLO';
+            const sloMark = sloState === 'pass' ? '✓' : sloState === 'warn' ? '△' : '!';
+            p99Slo.textContent = `Handler target: <20ms / Current: ${formatLatency(m.p99LatencyUs)} ${sloMark} ${sloLabel}`;
+            p99Slo.className = `slo-pill ${sloState}`;
+
+            const ratio = m.p99LatencyUs > 0 ? m.peakLatencyUs / m.p99LatencyUs : 0;
+            const context = ratio >= 5
+                ? `Peak ${formatLatency(m.peakLatencyUs)} = ${ratio.toFixed(1)}× p99 — outlier`
+                : `Peak ${formatLatency(m.peakLatencyUs)} = ${ratio.toFixed(1)}× p99`;
+            document.getElementById('peakContext').textContent = context;
+        }
+
+        function updateThroughput(m) {
+            document.getElementById('msgPerSec').textContent = m.messagesPerSecond.toLocaleString();
+            document.getElementById('totalMsgs').textContent = m.totalMessages.toLocaleString();
+            document.getElementById('totalBytes').textContent = formatBytes(m.totalBytes);
+            document.getElementById('uptime').textContent = formatUptime(m.uptimeSeconds);
+        }
+
+        function updateGc(m) {
+            document.getElementById('gen0Count').textContent = m.gen0Collections;
+            document.getElementById('gen1Count').textContent = m.gen1Collections;
+            document.getElementById('gen2Count').textContent = m.gen2Collections;
+            document.getElementById('gen0Delta').textContent = `+${m.gen0Delta} since last`;
+            document.getElementById('gen1Delta').textContent = `+${m.gen1Delta} since last`;
+            document.getElementById('gen2Delta').textContent = `+${m.gen2Delta} since last`;
+
+            document.getElementById('heapSize').textContent = (m.heapSizeBytes / 1048576).toFixed(1);
+
+            const pausePct = m.uptimeSeconds > 0 ? (m.gcPauseTimeMs / (m.uptimeSeconds * 1000)) * 100 : 0;
+            const pauseDelta = Math.max(0, m.gcPauseTimeMs - lastGcPauseMs);
+            document.getElementById('gcPausePct').textContent = `${pausePct.toFixed(3)}%`;
+            document.getElementById('gcPauseUnit').textContent = `${m.gcPauseTimeMs.toFixed(1)} ms total / +${pauseDelta.toFixed(1)} ms last sec`;
+            lastGcPauseMs = m.gcPauseTimeMs;
+
+            document.getElementById('latencyMode').textContent = m.latencyMode;
+            document.getElementById('latencyModeNote').textContent = m.latencyMode === 'SustainedLowLatency'
+                ? 'Target: SustainedLowLatency — configured at API startup.'
+                : `Target: SustainedLowLatency; current runtime reports ${m.latencyMode}.`;
+            document.getElementById('serverGc').textContent = m.isServerGc ? 'YES' : 'NO';
+        }
+
+        function updateAllocation(m) {
+            const scale = allocationScale(m.allocationRateBytes);
+            document.getElementById('allocLabel').textContent = `${formatBytes(m.allocationRateBytes)}/sec`;
+            document.getElementById('allocScaleMax').textContent = `${formatBytes(scale)}/sec`;
+            document.getElementById('allocBar').style.width = `${Math.min(m.allocationRateBytes / scale * 100, 100)}%`;
+        }
+
+        function updateQueue(q) {
+            if (!q) return;
+
+            document.getElementById('queueDepth').textContent = Number(q.queueDepth).toLocaleString();
+            document.getElementById('droppedTotal').textContent = Number(q.dropped).toLocaleString();
+
+            const losslessQueueDepth = q.lossless?.queueDepth ?? q.lossless?.QueueDepth ?? 0;
+            document.getElementById('losslessQueueDepth').textContent = Number(losslessQueueDepth).toLocaleString();
+
+            const queueDepth = Number(q.queueDepth);
+            const maxQueue = Math.max(...trendHistory.queueDepth, queueDepth);
+            const occupancy = queueDepth / QUEUE_CAPACITY * 100;
+            const maxOccupancy = maxQueue / QUEUE_CAPACITY * 100;
+            document.getElementById('queueOccupancy').textContent = `${occupancy.toFixed(1)}%`;
+            document.getElementById('queueOccupancyNote').textContent = `${queueDepth.toLocaleString()} / ${QUEUE_CAPACITY.toLocaleString()} capacity`;
+            document.getElementById('queueOccupancyScale').textContent = `${occupancy.toFixed(1)}% occupied / max ${maxOccupancy.toFixed(1)}%`;
+            document.getElementById('queueOccupancyBar').style.width = `${Math.min(occupancy, 100)}%`;
+        }
+
+        function updateTrends(m, q) {
+            pushHistory(trendHistory.p99Us, m.p99LatencyUs);
+            if (q) pushHistory(trendHistory.queueDepth, Number(q.queueDepth));
+
+            document.getElementById('p99TrendValue').textContent = formatLatency(m.p99LatencyUs);
+            document.getElementById('queueTrendValue').textContent = q ? Number(q.queueDepth).toLocaleString() : '—';
+
+            const p99Max = Math.max(P99_SLO_US, ...trendHistory.p99Us);
+            document.getElementById('p99TrendMax').textContent = `${formatLatency(p99Max)} max / 20ms SLO`;
+            drawTrend('p99Trend', trendHistory.p99Us, p99Max, 'red', P99_SLO_US);
+
+            const queueMax = Math.max(1, ...trendHistory.queueDepth);
+            document.getElementById('queueTrendMax').textContent = `max ${queueMax.toLocaleString()}`;
+            drawTrend('queueTrend', trendHistory.queueDepth, queueMax, 'cyan');
+        }
+
+        function pushHistory(values, next) {
+            values.push(next);
+            if (values.length > HISTORY_LIMIT) values.shift();
+        }
+
+        function drawTrend(canvasId, values, maxValue, colorName, threshold) {
+            const canvas = document.getElementById(canvasId);
+            const ctx = canvas.getContext('2d');
+            const width = canvas.width;
+            const height = canvas.height;
+            const pad = 10;
+            const colors = getComputedStyle(document.documentElement);
+            const lineColor = colors.getPropertyValue(`--${colorName}`).trim();
+            const gridColor = colors.getPropertyValue('--border').trim();
+
+            ctx.clearRect(0, 0, width, height);
+            ctx.strokeStyle = gridColor;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(pad, height - pad);
+            ctx.lineTo(width - pad, height - pad);
+            ctx.stroke();
+
+            if (threshold && maxValue > 0) {
+                const y = height - pad - (threshold / maxValue) * (height - pad * 2);
+                ctx.setLineDash([4, 4]);
+                ctx.strokeStyle = colors.getPropertyValue('--yellow').trim();
+                ctx.beginPath();
+                ctx.moveTo(pad, y);
+                ctx.lineTo(width - pad, y);
+                ctx.stroke();
+                ctx.setLineDash([]);
+            }
+
+            if (values.length < 2) return;
+
+            ctx.strokeStyle = lineColor;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            values.forEach((value, index) => {
+                const x = pad + (index / (HISTORY_LIMIT - 1)) * (width - pad * 2);
+                const y = height - pad - (value / maxValue) * (height - pad * 2);
+                if (index === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            });
+            ctx.stroke();
+        }
+
+        function formatLatency(us) {
+            if (us >= 1000) return `${(us / 1000).toFixed(1)} ms`;
+            return `${us.toFixed(1)} μs`;
+        }
+
+        function getSloState(p99Us) {
+            if (p99Us < P99_SLO_US * 0.8) return 'pass';
+            if (p99Us < P99_SLO_US) return 'warn';
+            return 'fail';
+        }
+
+        function allocationScale(bytes) {
+            const tenMb = 10 * 1024 * 1024;
+            const fiftyMb = 50 * 1024 * 1024;
+            const hundredMb = 100 * 1024 * 1024;
+            if (bytes <= tenMb) return tenMb;
+            if (bytes <= fiftyMb) return fiftyMb;
+            return hundredMb;
         }
 
         function formatBytes(b) {

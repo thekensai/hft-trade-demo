@@ -4,8 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Trade Signal Terminal</title>
-    <link rel="stylesheet" href="css/shared.css?v=20260608152606">
-    <link rel="stylesheet" href="css/terminal.css?v=20260608152606">
+    <link rel="stylesheet" href="css/shared.css?v=20260615153000">
+    <link rel="stylesheet" href="css/terminal.css?v=20260615153000">
 </head>
 <body>
     <nav class="site-nav">
@@ -62,11 +62,11 @@
                     <button class="reset-demo-button" id="resetDemoButton" type="button">RESET DEMO</button>
                 </div>
                 <div class="order-ticket">
-                    <button class="order-submit buy" id="buyEsButton" type="button">BUY 100 ES @ MKT</button>
-                    <label class="market-maker-toggle">
+                    <button class="order-submit buy" id="buyEsButton" type="button">BUY 100</button>
+                    <!--label class="market-maker-toggle">
                         <input id="marketMakerToggle" type="checkbox">
                         <span>Enable Market Maker Liquidity</span>
-                    </label>
+                    </label-->
                     <div class="mm-risk-summary">
                         <div><span>MM Inventory:</span><strong id="mmInventory">0</strong></div>
                         <div><span>MM Quote Limit:</span><strong id="mmInventoryLimit">100</strong></div>
@@ -74,8 +74,8 @@
                         <div><span>Quotes:</span><strong id="mmQuotes">BID/ASK</strong></div>
                     </div>
                     <div class="position-summary">
-                        <div class="position-row"><span>Position:</span><strong id="positionQty">—</strong></div>
-                        <div class="position-row"><span>Avg Price:</span><strong id="positionAvg">—</strong></div>
+                        <div class="position-row"><span id="positionLabel">Position:</span><strong id="positionQty">—</strong></div>
+                        <div class="position-row"><span id="positionAvgLabel">Avg Price:</span><strong id="positionAvg">—</strong></div>
                         <div class="position-row"><span>Realized:</span><strong id="positionRealized">—</strong></div>
                         <div class="position-row"><span>Unrealized vs Mid:</span><strong id="positionUnrealized">—</strong></div>
                     </div>
@@ -84,7 +84,11 @@
 
             <!-- Depth of Market -->
             <section class="panel depth-panel">
-                <div class="panel-title">DEPTH OF MARKET <span id="matchingModelBadge">FIFO PRICE-TIME</span><span id="avgFillBadge">FILL AVG —</span></div>
+                <div class="panel-title depth-title">
+                    <span>DEPTH OF MARKET — <strong id="depthSymbolLabel">ES</strong></span>
+                    <span id="matchingModelBadge">FIFO PRICE-TIME</span>
+                    <span id="avgFillBadge">FILL AVG —</span>
+                </div>
                 <div class="consumed-liquidity" id="consumedLiquidity">Recent consumed: —</div>
                 <div class="depth-book" id="depthBook"></div>
             </section>
@@ -109,7 +113,7 @@
 
             <!-- Event Rate Graph -->
             <section class="panel rate-graph-panel">
-                <div class="panel-title">EVENT RATE (msg/s)</div>
+                <div class="panel-title">SERVER EVENT RATE (msg/s)</div>
                 <canvas id="rateGraph"></canvas>
                 <div class="rate-time-axis" id="rateTimeAxis"></div>
             </section>
@@ -122,37 +126,48 @@
                 </div>
             </section>
 
-            <!-- Recent Orders -->
-            <section class="panel open-orders-panel">
-                <div class="panel-title">RECENT ORDERS</div>
-                <div class="open-orders" id="openOrders">No recent orders</div>
+            <!-- Trade Monitor -->
+            <section class="panel trade-monitor-panel open-orders-panel">
+                <div class="panel-title">TRADE MONITOR</div>
+                <div class="trade-monitor" id="tradeMonitor">No trades</div>
             </section>
 
             <!-- Execution Stats -->
             <section class="panel execution-stats-panel">
-                <div class="panel-title">EXECUTION STATS</div>
-                <div class="exec-stats-grid">
-                    <div><span>Orders Sent</span><strong id="execOrdersSent">0</strong></div>
-                    <div><span>Filled</span><strong id="execOrdersFilled">0</strong></div>
-                    <div><span>Cancels</span><strong id="execCancels">0</strong></div>
-                    <div><span>Fill Ratio</span><strong id="execFillRatio">0%</strong></div>
-                    <div><span>MTM PnL</span><strong id="execPnl">$0</strong></div>
-                    <div><span>Mark Mid</span><strong id="markMid">—</strong></div>
-                    <div><span>Arrival</span><strong id="slipArrival">—</strong></div>
-                    <div><span>Avg Fill</span><strong id="slipAvgFill">—</strong></div>
-                    <div><span>Slippage</span><strong id="slipValue">—</strong></div>
-                    <div><span>Total</span><strong id="latTotal">0ms</strong></div>
-                    <div><span>Risk</span><strong id="latRisk">0ms</strong></div>
-                    <div><span>Route</span><strong id="latRoute">0ms</strong></div>
-                    <div><span>Exchange</span><strong id="latExchange">0ms</strong></div>
-                    <div><span>Fill</span><strong id="latFill">0ms</strong></div>
-                    <div><span>Overhead</span><strong id="latOther">0ms</strong></div>
+                <div class="portfolio-card">
+                    <div class="panel-title">PORTFOLIO</div>
+                    <div class="portfolio-stats-grid">
+                        <div><span>Net Position</span><strong id="portfolioNetPosition">0</strong></div>
+                        <div><span>Portfolio MTM</span><strong id="execPnl">$0</strong></div>
+                        <div><span>Realized PnL</span><strong id="portfolioRealizedPnl">$0</strong></div>
+                    </div>
+                </div>
+                <div class="symbol-stats-card">
+                    <div class="panel-title">SELECTED SYMBOL STATS</div>
+                    <div class="exec-stats-grid">
+                        <div><span>Orders Sent</span><strong id="execOrdersSent">0</strong></div>
+                        <div><span>Filled</span><strong id="execOrdersFilled">0</strong></div>
+                        <div><span>Rejected</span><strong id="execRejected">0</strong></div>
+                        <div><span>Routed Fill Rate</span><strong id="execFillRatio">0%</strong></div>
+                        <div><span>Cancels</span><strong id="execCancels">0</strong></div>
+                        <div><span>Last Order</span><strong id="execLastOrder">READY</strong></div>
+                        <div><span>Mark Mid</span><strong id="markMid">—</strong></div>
+                        <div><span id="arrivalLabel">Arrival</span><strong id="slipArrival">—</strong></div>
+                        <div><span id="avgFillLabel">Avg Fill</span><strong id="slipAvgFill">—</strong></div>
+                        <div><span>Slippage</span><strong id="slipValue">—</strong></div>
+                        <div><span>Total</span><strong id="latTotal">0ms</strong></div>
+                        <div><span>Risk</span><strong id="latRisk">0ms</strong></div>
+                        <div><span>Route</span><strong id="latRoute">0ms</strong></div>
+                        <div><span>Exchange</span><strong id="latExchange">0ms</strong></div>
+                        <div><span>Fill</span><strong id="latFill">0ms</strong></div>
+                        <div><span>Overhead</span><strong id="latOther">0ms</strong></div>
+                    </div>
                 </div>
             </section>
         </div>
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
-    <script src="js/terminal.js?v=20260608152606"></script>
+    <script src="js/terminal.js?v=20260615153000"></script>
 </body>
 </html>

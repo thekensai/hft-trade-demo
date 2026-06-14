@@ -39,7 +39,9 @@ const state = {
     maxLifecycleRows: 80,
     lifecycleEventIds: new Set(),
     latestMarketMakerState: null,
+    selectedSymbol: "ES",
     currentPosition: 0,
+    attemptedLimitReject: false,
     maxPosition: 1000,
     manualOrderQuantity: 100,
     orderSubmitInFlight: false,
@@ -80,19 +82,29 @@ const dom = {
     consumedLiquidity: document.getElementById("consumedLiquidity"),
     avgFillBadge: document.getElementById("avgFillBadge"),
     matchingModelBadge: document.getElementById("matchingModelBadge"),
+    depthSymbolLabel: document.getElementById("depthSymbolLabel"),
+    positionLabel: document.getElementById("positionLabel"),
     positionQty: document.getElementById("positionQty"),
+    positionAvgLabel: document.getElementById("positionAvgLabel"),
     positionAvg: document.getElementById("positionAvg"),
     positionRealized: document.getElementById("positionRealized"),
     positionUnrealized: document.getElementById("positionUnrealized"),
     orderLifecycle: document.getElementById("orderLifecycle"),
+    tradeMonitor: document.getElementById("tradeMonitor"),
     openOrders: document.getElementById("openOrders"),
     execOrdersSent: document.getElementById("execOrdersSent"),
     execOrdersFilled: document.getElementById("execOrdersFilled"),
+    execRejected: document.getElementById("execRejected"),
     execCancels: document.getElementById("execCancels"),
     execFillRatio: document.getElementById("execFillRatio"),
+    execLastOrder: document.getElementById("execLastOrder"),
     execPnl: document.getElementById("execPnl"),
+    portfolioNetPosition: document.getElementById("portfolioNetPosition"),
+    portfolioRealizedPnl: document.getElementById("portfolioRealizedPnl"),
     markMid: document.getElementById("markMid"),
+    arrivalLabel: document.getElementById("arrivalLabel"),
     slipArrival: document.getElementById("slipArrival"),
+    avgFillLabel: document.getElementById("avgFillLabel"),
     slipAvgFill: document.getElementById("slipAvgFill"),
     slipValue: document.getElementById("slipValue"),
     latTotal: document.getElementById("latTotal"),
@@ -405,6 +417,7 @@ function renderPriceGrid() {
 function updatePriceGrid(signal) {
     let row = document.getElementById(`price-${signal.symbol}`);
     const isUp = signal.change >= 0;
+    const tradable = isTradableSymbol(signal.symbol);
 
     if (!row) {
         row = document.createElement("div");
@@ -417,9 +430,14 @@ function updatePriceGrid(signal) {
             <span class="price-change"></span>
             <span class="price-exchange"></span>
         `;
+        row.addEventListener("click", () => selectSymbol(signal.symbol));
         dom.priceGrid.appendChild(row);
     }
 
+    row.classList.toggle("tradable", tradable);
+    row.classList.toggle("non-tradable", !tradable);
+    row.classList.toggle("selected", signal.symbol === state.selectedSymbol);
+    row.title = tradable ? `Trade ${signal.symbol}` : "Market-data only";
     row.querySelector(".price-symbol").textContent = signal.symbol;
     row.querySelector(".price-exchange").textContent = signal.exchange;
 
@@ -440,6 +458,37 @@ function updatePriceGrid(signal) {
     row.classList.toggle("flash-red", !isUp);
 
     state.prices.set(signal.symbol, signal);
+}
+
+function setSelectedSymbolLabels() {
+    setText(dom.positionLabel, `Position (${state.selectedSymbol}):`);
+    setText(dom.positionAvgLabel, `Avg Price (${state.selectedSymbol}):`);
+    setText(dom.arrivalLabel, `Arrival (${state.selectedSymbol})`);
+    setText(dom.avgFillLabel, `Avg Fill (${state.selectedSymbol})`);
+    setText(dom.depthSymbolLabel, state.selectedSymbol);
+}
+
+async function selectSymbol(symbol) {
+    if (!isTradableSymbol(symbol) || symbol === state.selectedSymbol) return;
+
+    const previous = state.selectedSymbol;
+    state.selectedSymbol = symbol;
+    state.currentPosition = 0;
+    state.attemptedLimitReject = false;
+    document.getElementById(`price-${previous}`)?.classList.remove("selected");
+    document.getElementById(`price-${symbol}`)?.classList.add("selected");
+    updateSelectedSignalRows();
+    setText(dom.consumedLiquidity, "Recent consumed: —");
+    setSelectedSymbolLabels();
+    state.lastConsumedFills = [];
+    state.consumedFillIds.clear();
+    renderPosition(null);
+    updateBuyButtonState();
+    await Promise.all([refreshDepth(), refreshPositions(), refreshMarketMakerState()]);
+}
+
+function isTradableSymbol(symbol) {
+    return !String(symbol).toUpperCase().endsWith("-USD");
 }
 
 // ── Signal Feed ──
@@ -485,6 +534,8 @@ function addSignalRow(signal) {
     const row = document.createElement("div");
     const isBuy = signal.direction === "BUY";
     row.className = `signal-row ${isBuy ? "buy" : "sell"}`;
+    row.classList.toggle("selected", signal.symbol === state.selectedSymbol);
+    row.dataset.symbol = signal.symbol;
 
     const time = new Date(signal.timestamp).toISOString().substring(11, 23);
     const execPrice = isBuy ? signal.askPrice : signal.bidPrice;
@@ -502,6 +553,13 @@ function addSignalRow(signal) {
     while (dom.signalFeed.children.length > state.maxFeedRows) {
         dom.signalFeed.lastElementChild.remove();
     }
+}
+
+function updateSelectedSignalRows() {
+    if (!dom.signalFeed) return;
+    dom.signalFeed.querySelectorAll(".signal-row").forEach((row) => {
+        row.classList.toggle("selected", row.dataset.symbol === state.selectedSymbol);
+    });
 }
 
 // ── Order Flow ──
@@ -705,13 +763,13 @@ dom.resetDemoButton?.addEventListener("click", () => resetDemo());
 dom.marketMakerToggle?.addEventListener("change", () => renderMarketMakerState(state.latestMarketMakerState));
 
 dom.buyEsButton?.addEventListener("click", async () => {
-    if (isBuyLimitReached()) {
+    if (isBuyLimitReached() && state.attemptedLimitReject) {
         updateBuyButtonState();
         return;
     }
 
     await submitOrder({
-        symbol: "ES",
+        symbol: state.selectedSymbol,
         side: "BUY",
         quantity: state.manualOrderQuantity,
         orderType: "Market",
@@ -752,6 +810,8 @@ async function resetDemo({ automatic = false } = {}) {
 
 function resetDemoUi() {
     state.currentPosition = 0;
+    state.attemptedLimitReject = false;
+    setSelectedSymbolLabels();
     state.lastConsumedFills = [];
     state.latestLatency = null;
     state.latestSlippage = null;
@@ -760,14 +820,20 @@ function resetDemoUi() {
     setText(dom.consumedLiquidity, "Recent consumed: —");
     setText(dom.avgFillBadge, "FILL AVG —");
     renderPosition(null);
-    renderExecutionStats({ ordersSent: 0, ordersFilled: 0, cancels: 0, fillRatio: 0, pnl: 0 });
+    renderPortfolioStats([]);
+    setText(dom.execLastOrder, "READY");
+    dom.execLastOrder?.classList.remove("negative", "positive");
+    renderExecutionStats({ ordersSent: 0, ordersFilled: 0, rejections: 0, cancels: 0, fillRatio: 0, pnl: 0 });
     resetSlippageStats();
     resetLatencyStats();
     if (dom.orderLifecycle) {
-        dom.orderLifecycle.innerHTML = `<div class="lifecycle-row muted">Ready — submit BUY 100 ES @ MKT</div>`;
+        dom.orderLifecycle.innerHTML = `<div class="lifecycle-row muted">Ready — submit BUY 100 ${state.selectedSymbol} @ MKT</div>`;
+    }
+    if (dom.tradeMonitor) {
+        dom.tradeMonitor.textContent = "No trades";
     }
     if (dom.openOrders) {
-        dom.openOrders.textContent = "No recent orders";
+        dom.openOrders.textContent = "No order history";
     }
 }
 
@@ -811,17 +877,21 @@ async function submitOrder(order) {
 
 function renderOrderResult(result) {
     appendLifecycle(result.lifecycleEvents ?? []);
+    const rejected = result.order?.status === "Rejected";
+    if (rejected) state.attemptedLimitReject = true;
+    renderLastOrderStatus(rejected ? "RISK REJECT" : result.order?.status?.toUpperCase());
     if (result.depth) renderDepth(result.depth, result.consumedLiquidity ?? result.fills ?? []);
     if (result.position) renderPosition(result.position);
     if (result.slippage) renderSlippageStats(result.slippage);
     if (result.stats) renderExecutionStats(result.stats, result.latency);
+    if (rejected && dom.orderLifecycle) dom.orderLifecycle.scrollTop = dom.orderLifecycle.scrollHeight;
 }
 
 async function refreshTradingPanels() {
     await Promise.all([
         refreshDepth(),
         refreshPositions(),
-        refreshOpenOrders(),
+        refreshTradeMonitor(),
         refreshExecutionStats(),
         refreshMarketMakerState(),
         refreshLifecycle(),
@@ -830,7 +900,7 @@ async function refreshTradingPanels() {
 
 async function refreshDepth() {
     if (!dom.depthBook) return;
-    const response = await fetch("/api/depth/ES");
+    const response = await fetch(`/api/depth/${encodeURIComponent(state.selectedSymbol)}`);
     if (response.ok) renderDepth(await response.json());
 }
 
@@ -838,8 +908,15 @@ async function refreshPositions() {
     const response = await fetch("/api/positions");
     if (!response.ok) return;
     const positions = await response.json();
-    renderPosition((positions ?? []).find((p) => p.symbol === "ES") ?? null);
+    renderPosition((positions ?? []).find((p) => p.symbol === state.selectedSymbol) ?? null);
+    renderPortfolioStats(positions ?? []);
     updateBuyButtonState();
+}
+
+async function refreshTradeMonitor() {
+    if (!dom.tradeMonitor) return;
+    const response = await fetch("/api/trade-monitor");
+    if (response.ok) renderTradeMonitor(await response.json());
 }
 
 async function refreshOpenOrders() {
@@ -875,7 +952,7 @@ function renderDepth(depth, fills = []) {
     const bidRows = (depth.bids ?? []).map((level) => depthRow(level, "bid", consumed));
     dom.depthBook.innerHTML = [...askRows, midRow, ...bidRows].join("");
     setText(dom.avgFillBadge, `FILL AVG ${formatPrice(weightedAverageFill() ?? depth.midPrice)}`);
-    setText(dom.matchingModelBadge, `FIFO PRICE-TIME · BOOK ${Number(depth.sequence ?? 0).toLocaleString()}`);
+    setText(dom.matchingModelBadge, `BOOK ${Number(depth.sequence ?? 0).toLocaleString()} · FIFO PRICE-TIME`);
     setText(dom.markMid, formatTradePrice(depth.midPrice));
 }
 
@@ -913,7 +990,7 @@ function depthRow(level, side, consumed) {
     return `<div class="depth-row ${side}${consumedQuantity > 0 ? " consumed" : ""}">
         <span>${formatPrice(level.price)}</span>
         <span>${Number(level.quantity).toLocaleString()}</span>
-        <span>${consumedQuantity > 0 ? `-${consumedQuantity}` : ""}</span>
+        <span>${consumedQuantity > 0 ? `hit ${consumedQuantity}` : ""}</span>
     </div>`;
 }
 
@@ -964,6 +1041,7 @@ function lifecycleRow(evt) {
     const id = evt.eventId ?? `${evt.orderId ?? "local"}-${evt.stage}-${evt.timestamp}`;
     return `<div class="lifecycle-row ${stageClass}" data-event-id="${id}">
         <span class="lifecycle-time">${time}</span>
+        <span class="lifecycle-symbol">${evt.symbol ?? "—"}</span>
         <span class="lifecycle-stage">${evt.stage}</span>
         <span>${evt.message}</span>
     </div>`;
@@ -979,6 +1057,13 @@ function renderPosition(position) {
     updateBuyButtonState();
 }
 
+function renderPortfolioStats(positions) {
+    const netPosition = positions.reduce((sum, position) => sum + Number(position.quantity ?? 0), 0);
+    const realizedPnl = positions.reduce((sum, position) => sum + Number(position.realizedPnl ?? 0), 0);
+    setText(dom.portfolioNetPosition, netPosition.toLocaleString());
+    setMoney(dom.portfolioRealizedPnl, realizedPnl);
+}
+
 function updateBuyButtonState() {
     if (!dom.buyEsButton) return;
 
@@ -990,33 +1075,86 @@ function updateBuyButtonState() {
 
     if (state.orderSubmitInFlight) {
         dom.buyEsButton.disabled = true;
-        dom.buyEsButton.textContent = "SENDING BUY 100 ES...";
+        dom.buyEsButton.style.cursor = "wait";
+        dom.buyEsButton.textContent = "SENDING...";
         return;
     }
 
     if (isBuyLimitReached()) {
-        dom.buyEsButton.disabled = true;
-        dom.buyEsButton.textContent = `POSITION LIMIT ${state.maxPosition.toLocaleString()}`;
+        dom.buyEsButton.disabled = state.attemptedLimitReject;
+        dom.buyEsButton.style.cursor = state.attemptedLimitReject ? "not-allowed" : "pointer";
+        dom.buyEsButton.textContent = state.attemptedLimitReject
+            ? `LIMIT ${state.maxPosition.toLocaleString()}`
+            : `TEST REJECT ${state.selectedSymbol}`;
         return;
     }
 
     dom.buyEsButton.disabled = false;
-    dom.buyEsButton.textContent = "BUY 100 ES @ MKT";
+    dom.buyEsButton.style.cursor = "pointer";
+    dom.buyEsButton.textContent = `BUY 100 ${state.selectedSymbol}`;
 }
 
 function isBuyLimitReached() {
     return state.currentPosition + state.manualOrderQuantity > state.maxPosition;
 }
 
+function renderTradeMonitor(rows) {
+    if (!dom.tradeMonitor) return;
+    if (!rows || rows.length === 0) {
+        dom.tradeMonitor.textContent = "No trades";
+        return;
+    }
+
+    dom.tradeMonitor.innerHTML = `<div class="trade-monitor-header">
+        <span>Order ID</span>
+        <span>Symbol</span>
+        <span>Status</span>
+        <span>Venue</span>
+        <span>Latency</span>
+        <span>Fill %</span>
+        <span>PnL</span>
+    </div>${rows.map(tradeMonitorRow).join("")}`;
+}
+
+function tradeMonitorRow(row) {
+    const orderId = String(row.orderId ?? "");
+    const shortOrderId = orderId.length > 8 ? orderId.substring(0, 8) : orderId || "—";
+    const latencyMs = row.latencyMs ?? row.latencyMS;
+    const latency = latencyMs == null ? "—" : `${Number(latencyMs).toFixed(1)}ms`;
+    const fillPercent = `${Number(row.fillPercent ?? 0).toFixed(0)}%`;
+    const pnl = Number(row.pnl ?? row.pnL ?? 0);
+    const pnlClass = pnl > 0 ? "positive" : pnl < 0 ? "negative" : "";
+
+    return `<div class="trade-monitor-row ${tradeHealthClass(row.health)}" title="${orderId}">
+        <span class="mono-id">${shortOrderId}</span>
+        <span>${row.symbol ?? "—"}</span>
+        <span>${row.status ?? "—"}</span>
+        <span>${row.venue ?? "—"}</span>
+        <span>${latency}</span>
+        <span>${fillPercent}</span>
+        <span class="${pnlClass}">${formatMoneyText(pnl)}</span>
+    </div>`;
+}
+
+function tradeHealthClass(health) {
+    const value = String(health ?? "").toLowerCase();
+    if (value === "abnormal") return "abnormal";
+    if (value === "slow") return "slow";
+    return "healthy";
+}
+
 function renderRecentOrders(orders) {
     if (!dom.openOrders) return;
     if (!orders || orders.length === 0) {
-        dom.openOrders.textContent = "No recent orders";
+        dom.openOrders.textContent = "No order history";
         return;
     }
-    dom.openOrders.innerHTML = orders.slice(0, 8).map((order) => {
+    dom.openOrders.innerHTML = orders.map((order) => {
         const quantity = Number(order.filledQuantity || order.quantity).toLocaleString();
         const price = order.averageFillPrice == null ? formatOrderPrice(order) : `avg ${formatTradePrice(order.averageFillPrice)}`;
+        const status = order.status === "Rejected" && order.rejectReason
+            ? `Rejected (${shortRejectReason(order.rejectReason)})`
+            : order.status;
         const action = isOpenOrder(order)
             ? `<button class="mini-action-button" type="button" data-cancel-order="${order.orderId}">Cancel</button>`
             : `<span></span>`;
@@ -1025,7 +1163,7 @@ function renderRecentOrders(orders) {
             <span>${order.symbol}</span>
             <span>${order.side}</span>
             <span>${quantity} ${price}</span>
-            <span>${order.status}</span>
+            <span>${status}</span>
             ${action}
         </div>`;
     }).join("");
@@ -1036,6 +1174,10 @@ function renderRecentOrders(orders) {
 
 function formatOrderPrice(order) {
     return order.limitPrice == null ? "MKT" : formatPrice(order.limitPrice);
+}
+
+function shortRejectReason(reason) {
+    return String(reason).replace(/ \(.*\)$/, "");
 }
 
 function isOpenOrder(order) {
@@ -1064,12 +1206,26 @@ function renderSlippageStats(slippage) {
     dom.slipValue?.classList.toggle("positive", points < 0);
 }
 
+function renderLastOrderStatus(status) {
+    if (!status) return;
+    setText(dom.execLastOrder, status);
+    dom.execLastOrder?.classList.toggle("negative", status.includes("REJECT"));
+    dom.execLastOrder?.classList.toggle("positive", status === "FILLED");
+}
+
+function routedFillRate(stats) {
+    const routed = Number(stats.ordersSent) - Number(stats.rejections ?? 0);
+    if (routed <= 0) return 0;
+    return Number(stats.ordersFilled) / routed * 100;
+}
+
 function renderExecutionStats(stats, latency) {
     if (!stats) return;
     setText(dom.execOrdersSent, Number(stats.ordersSent).toLocaleString());
     setText(dom.execOrdersFilled, Number(stats.ordersFilled).toLocaleString());
+    setText(dom.execRejected, Number(stats.rejections ?? 0).toLocaleString());
     setText(dom.execCancels, Number(stats.cancels).toLocaleString());
-    setText(dom.execFillRatio, `${Number(stats.fillRatio).toFixed(0)}%`);
+    setText(dom.execFillRatio, `${routedFillRate(stats).toFixed(0)}%`);
     setMoney(dom.execPnl, stats.pnl ?? stats.pnL);
 
     if (latency) {
@@ -1129,9 +1285,14 @@ function setMoney(el, value) {
         return;
     }
     const amount = Number(value);
-    el.textContent = `${amount < 0 ? "-$" : "$"}${Math.abs(amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    el.textContent = formatMoneyText(amount);
     el.classList.toggle("positive", amount > 0);
     el.classList.toggle("negative", amount < 0);
+}
+
+function formatMoneyText(value) {
+    const amount = Number(value ?? 0);
+    return `${amount < 0 ? "-$" : "$"}${Math.abs(amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 refreshTradingPanels();

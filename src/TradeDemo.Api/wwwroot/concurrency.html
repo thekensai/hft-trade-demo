@@ -5,6 +5,70 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Concurrency Model — Trade Signal Terminal</title>
     <link rel="stylesheet" href="css/shared.css">
+    <style>
+        .thread-monitor {
+            background: var(--bg-panel);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+            margin: 16px 0;
+        }
+
+        .thread-monitor-header,
+        .thread-monitor-row {
+            display: grid;
+            grid-template-columns: 1fr 160px;
+            gap: 16px;
+            align-items: center;
+            padding: 10px 14px;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .thread-monitor-header {
+            background: var(--bg-secondary);
+            color: var(--text-muted);
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+        }
+
+        .thread-monitor-row {
+            border-top: 1px solid rgba(42, 49, 66, 0.65);
+            color: var(--text-secondary);
+            font-size: 13px;
+        }
+
+        .thread-monitor-row strong {
+            color: var(--text-primary);
+            font-weight: 700;
+        }
+
+        .thread-rate {
+            color: var(--cyan);
+            font-weight: 700;
+            text-align: right;
+        }
+
+        .thread-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            margin-left: 10px;
+            color: var(--green);
+            font-size: 10px;
+            letter-spacing: 0.8px;
+            text-transform: uppercase;
+        }
+
+        .thread-status-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 999px;
+            background: var(--green);
+            box-shadow: 0 0 8px rgba(16, 185, 129, 0.8);
+        }
+    </style>
 </head>
 <body>
     <nav class="site-nav">
@@ -21,6 +85,28 @@
     <div class="page-content">
         <h1 class="page-title">Concurrency Model</h1>
         <p class="page-subtitle">Threading architecture, lock-free patterns, and async producer/consumer design for high-throughput event processing</p>
+
+        <!-- ── Live Thread Counters ── -->
+        <div class="section">
+            <h2 class="section-title">
+                <span>Live Thread Counters</span>
+                <span class="thread-status"><span class="thread-status-dot"></span> live</span>
+            </h2>
+            <div class="section-body">
+                <p>Approximate live throughput by pipeline stage. Feed and normalizer track raw market-data generation; risk/routing track server-side drain throughput; UI coalescer tracks client snapshot cadence.</p>
+            </div>
+            <div class="thread-monitor">
+                <div class="thread-monitor-header">
+                    <span>Thread</span>
+                    <span>msgs/sec</span>
+                </div>
+                <div class="thread-monitor-row"><strong>Feed Thread</strong><span class="thread-rate" id="feedThreadRate">—</span></div>
+                <div class="thread-monitor-row"><strong>Normalizer Thread</strong><span class="thread-rate" id="normalizerThreadRate">—</span></div>
+                <div class="thread-monitor-row"><strong>Risk Thread</strong><span class="thread-rate" id="riskThreadRate">—</span></div>
+                <div class="thread-monitor-row"><strong>Routing Thread</strong><span class="thread-rate" id="routingThreadRate">—</span></div>
+                <div class="thread-monitor-row"><strong>UI Thread</strong><span class="thread-rate" id="uiThreadRate">—</span></div>
+            </div>
+        </div>
 
         <!-- ── Threading Overview ── -->
         <div class="section">
@@ -257,5 +343,37 @@ O(1) per write                DropOldest policy              │
             </div>
         </div>
     </div>
+
+    <script>
+        const threadRateIds = {
+            Feed: 'feedThreadRate',
+            Normalizer: 'normalizerThreadRate',
+            Risk: 'riskThreadRate',
+            Routing: 'routingThreadRate',
+            'UI Coalescer': 'uiThreadRate'
+        };
+
+        async function pollThreadCounters() {
+            try {
+                const response = await fetch('/api/concurrency/threads');
+                if (!response.ok) return;
+                const counters = await response.json();
+                for (const counter of counters) {
+                    const id = threadRateIds[counter.thread ?? counter.Thread];
+                    const el = id ? document.getElementById(id) : null;
+                    if (el) el.textContent = formatRate(counter.messagesPerSecond ?? counter.MessagesPerSecond ?? 0);
+                }
+            } catch (err) {
+                // Retry on next interval.
+            }
+        }
+
+        function formatRate(value) {
+            return Math.round(Number(value ?? 0)).toLocaleString();
+        }
+
+        pollThreadCounters();
+        setInterval(pollThreadCounters, 1000);
+    </script>
 </body>
 </html>

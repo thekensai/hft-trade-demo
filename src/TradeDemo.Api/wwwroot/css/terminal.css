@@ -223,6 +223,15 @@ body {
     opacity: 0.6;
 }
 
+.depth-title {
+    gap: 10px;
+}
+
+.depth-title strong {
+    color: var(--cyan);
+    font-size: 10px;
+}
+
 #matchingModelBadge {
     color: var(--yellow);
     font-size: 9px;
@@ -271,9 +280,24 @@ body {
     gap: 8px;
     align-items: center;
     padding: 4px 12px 4px 8px;
+    border: 1px solid transparent;
     border-radius: 3px;
     background: var(--bg-secondary);
-    transition: background 0.35s ease-out;
+    transition: background 0.35s ease-out, border-color 0.15s ease-out;
+}
+
+.price-row.tradable {
+    cursor: pointer;
+}
+
+.price-row.non-tradable {
+    cursor: default;
+    opacity: 0.82;
+}
+
+.price-row.selected {
+    border-color: var(--cyan);
+    box-shadow: inset 0 0 0 1px var(--cyan);
 }
 
 .price-row.flash-green {
@@ -335,16 +359,24 @@ body {
     gap: 4px;
     padding: 3px 6px;
     border-radius: 2px;
+    border: 1px solid transparent;
     font-variant-numeric: tabular-nums;
 }
 
+.signal-row.selected {
+    border-color: var(--cyan);
+    box-shadow: inset 0 0 0 1px rgba(6, 182, 212, 0.55);
+}
+
 .signal-row.buy {
-    border-left: 2px solid var(--green);
+    border-left-color: var(--green);
+    border-left-width: 2px;
     background: rgba(16, 185, 129, 0.05);
 }
 
 .signal-row.sell {
-    border-left: 2px solid var(--red);
+    border-left-color: var(--red);
+    border-left-width: 2px;
     background: rgba(239, 68, 68, 0.05);
 }
 
@@ -398,24 +430,31 @@ body {
 }
 
 .order-submit {
+    align-self: center;
     border: 1px solid var(--green);
-    border-radius: 4px;
-    background: rgba(16, 185, 129, 0.14);
+    border-radius: 5px;
+    background: linear-gradient(180deg, rgba(16, 185, 129, 0.24), rgba(16, 185, 129, 0.12));
+    box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.08), 0 8px 18px rgba(0, 0, 0, 0.18);
     color: var(--green);
     cursor: pointer;
     font-family: var(--font-mono);
     font-size: 12px;
-    font-weight: 700;
-    padding: 7px 10px;
-    text-align: left;
+    font-weight: 800;
+    letter-spacing: 0.8px;
+    min-width: 148px;
+    padding: 8px 18px;
+    text-align: center;
+    text-transform: uppercase;
 }
 
 .order-submit:hover:not(:disabled) {
-    background: rgba(16, 185, 129, 0.24);
+    background: linear-gradient(180deg, rgba(16, 185, 129, 0.34), rgba(16, 185, 129, 0.18));
+    border-color: #34d399;
+    transform: translateY(-1px);
 }
 
 .order-submit:disabled {
-    cursor: wait;
+    cursor: not-allowed;
     opacity: 0.55;
 }
 
@@ -542,16 +581,19 @@ body {
 
 .lifecycle-log {
     flex: 1;
-    overflow: hidden;
+    overflow-y: auto;
+    overflow-x: hidden;
     display: flex;
     flex-direction: column;
     gap: 2px;
     font-size: 10px;
+    min-height: 0;
+    padding-right: 2px;
 }
 
 .lifecycle-row {
     display: grid;
-    grid-template-columns: 82px 120px 1fr;
+    grid-template-columns: 82px 46px 120px 1fr;
     gap: 8px;
     padding: 2px 4px;
     border-left: 2px solid var(--cyan);
@@ -562,30 +604,85 @@ body {
 .lifecycle-row.risk { border-left-color: var(--cyan); }
 .lifecycle-row.routed { border-left-color: var(--yellow); }
 .lifecycle-row.fill { border-left-color: var(--green); }
-.lifecycle-row.rejected, .lifecycle-row.canceled { border-left-color: var(--red); }
+.lifecycle-row.rejected, .lifecycle-row.risk-reject, .lifecycle-row.canceled { border-left-color: var(--red); }
 .lifecycle-row.muted { color: var(--text-muted); display: block; }
 .lifecycle-row.submitted .lifecycle-stage,
 .lifecycle-row.risk .lifecycle-stage { color: var(--cyan); }
 .lifecycle-row.routed .lifecycle-stage { color: var(--yellow); }
 .lifecycle-row.fill .lifecycle-stage { color: var(--green); }
 .lifecycle-row.rejected .lifecycle-stage,
+.lifecycle-row.risk-reject .lifecycle-stage,
 .lifecycle-row.canceled .lifecycle-stage { color: var(--red); }
 .lifecycle-time { color: var(--text-muted); }
+.lifecycle-symbol { color: var(--text-primary); font-weight: 700; }
 .lifecycle-stage { color: var(--cyan); font-weight: 700; }
 
-.open-orders-panel {
+.open-orders-panel,
+.trade-monitor-panel {
     grid-column: 3;
     grid-row: 4 / 6;
 }
 
-.open-orders {
+.open-orders,
+.trade-monitor {
     flex: 1;
-    overflow: hidden;
+    overflow-y: auto;
+    overflow-x: hidden;
     display: flex;
     flex-direction: column;
     gap: 3px;
     color: var(--text-muted);
     font-size: 10px;
+    min-height: 0;
+    padding-right: 2px;
+}
+
+.trade-monitor-header,
+.trade-monitor-row {
+    display: grid;
+    grid-template-columns: 60px 40px 64px 48px 58px 42px 64px;
+    gap: 4px;
+    align-items: center;
+    font-variant-numeric: tabular-nums;
+}
+
+.trade-monitor-header {
+    color: var(--text-muted);
+    font-size: 8px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    padding: 2px 4px;
+    text-transform: uppercase;
+}
+
+.trade-monitor-row {
+    background: var(--bg-secondary);
+    border-left: 3px solid var(--green);
+    border-radius: 2px;
+    color: var(--text-primary);
+    padding: 3px 4px;
+}
+
+.trade-monitor-row.healthy {
+    border-left-color: var(--green);
+    background: rgba(30, 203, 139, 0.08);
+}
+
+.trade-monitor-row.slow {
+    border-left-color: var(--yellow);
+    background: rgba(245, 158, 11, 0.10);
+}
+
+.trade-monitor-row.abnormal {
+    border-left-color: var(--red);
+    background: rgba(239, 68, 68, 0.10);
+}
+
+.trade-monitor-row .positive { color: var(--green); }
+.trade-monitor-row .negative { color: var(--red); }
+
+.mono-id {
+    color: var(--cyan);
 }
 
 .open-order-row {
@@ -616,8 +713,21 @@ body {
 .execution-stats-panel {
     grid-column: 4;
     grid-row: 4 / 6;
+    gap: 8px;
 }
 
+.portfolio-card,
+.symbol-stats-card {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.symbol-stats-card {
+    flex: 1;
+}
+
+.portfolio-stats-grid,
 .exec-stats-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -625,18 +735,25 @@ body {
     font-size: 10px;
 }
 
+.portfolio-stats-grid {
+    grid-template-columns: 1fr 1fr 1fr;
+}
+
+.portfolio-stats-grid div,
 .exec-stats-grid div {
     background: var(--bg-secondary);
     border-radius: 3px;
     padding: 5px;
 }
 
+.portfolio-stats-grid span,
 .exec-stats-grid span {
     color: var(--text-muted);
     display: block;
     margin-bottom: 2px;
 }
 
+.portfolio-stats-grid strong,
 .exec-stats-grid strong {
     color: var(--cyan);
     font-size: 13px;

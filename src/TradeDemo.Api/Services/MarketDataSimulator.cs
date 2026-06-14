@@ -33,6 +33,8 @@ public class MarketDataSimulator : BackgroundService
 
     private static readonly (string Symbol, decimal BasePrice, string Exchange)[] Instruments =
     [
+        ("ES", 5982.00m, "CME"),
+        ("NQ", 21850.50m, "CME"),
         ("AAPL", 195.50m, "NASDAQ"),
         ("MSFT", 430.20m, "NASDAQ"),
         ("GOOGL", 178.90m, "NASDAQ"),

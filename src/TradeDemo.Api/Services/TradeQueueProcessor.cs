@@ -44,9 +44,15 @@ public class TradeQueueProcessor : BackgroundService
     private long _broadcastCount;    // total snapshot broadcasts sent
     private long _broadcastItemCount; // total unique symbols sent across all broadcasts
     private long _coalescedCount;    // total signals coalesced (overwritten in cache)
+    private long _processedPerSecX100;
+    private long _snapshotsPerSecX100;
+    private long _coalescedPerSecX100;
 
     public long ProcessedCount => Interlocked.Read(ref _processedCount);
     public long BroadcastCount => Interlocked.Read(ref _broadcastCount);
+    public double ProcessedPerSec => Interlocked.Read(ref _processedPerSecX100) / 100.0;
+    public double SnapshotsPerSec => Interlocked.Read(ref _snapshotsPerSecX100) / 100.0;
+    public double CoalescedPerSec => Interlocked.Read(ref _coalescedPerSecX100) / 100.0;
     public int QueueDepth => _channel.Reader.Count;
 
     /// <summary>
@@ -123,6 +129,7 @@ public class TradeQueueProcessor : BackgroundService
         using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(BroadcastIntervalMs));
 
         var lastStatsAt = Stopwatch.GetTimestamp();
+        var lastProcessedTotal = 0L;
         var statsIntervalTicks = Stopwatch.Frequency * StatsIntervalMs / 1000;
         var broadcastsSinceLastStats = 0L;
         var coalescedSinceLastStats = 0L;
@@ -189,10 +196,17 @@ public class TradeQueueProcessor : BackgroundService
                     }
 
                     var processedTotal = Interlocked.Read(ref _processedCount);
+                    var processedPerSec = elapsedSeconds > 0
+                        ? (processedTotal - lastProcessedTotal) / elapsedSeconds
+                        : 0;
                     var coalescedTotal = Interlocked.Read(ref _coalescedCount);
                     var coalescedPerSec = elapsedSeconds > 0
                         ? coalescedSinceLastStats / elapsedSeconds
                         : 0;
+                    Interlocked.Exchange(ref _processedPerSecX100, (long)(processedPerSec * 100));
+                    Interlocked.Exchange(ref _snapshotsPerSecX100, (long)(snapshotsPerSec * 100));
+                    Interlocked.Exchange(ref _coalescedPerSecX100, (long)(coalescedPerSec * 100));
+                    lastProcessedTotal = processedTotal;
 
                     await _hubContext.Clients.All.SendAsync("Stats", new
                     {

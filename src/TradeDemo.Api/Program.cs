@@ -1,7 +1,10 @@
 using TradeDemo.Api.Hubs;
 using TradeDemo.Api.Journal;
+using System.Runtime;
 using TradeDemo.Api.Models;
 using TradeDemo.Api.Services;
+
+GCSettings.LatencyMode = GCLatencyMode.SustainedLowLatency;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -64,6 +67,20 @@ app.MapGet("/api/queue/stats", (TradeQueueProcessor processor, LosslessTickStore
     timestamp = DateTime.UtcNow
 }));
 
+app.MapGet("/api/concurrency/threads", (GenerationStats generationStats, TradeQueueProcessor processor) =>
+{
+    var (_, feedRate) = generationStats.GetSnapshot();
+    var processedRate = processor.ProcessedPerSec;
+    return Results.Ok(new[]
+    {
+        new { Thread = "Feed", MessagesPerSecond = feedRate },
+        new { Thread = "Normalizer", MessagesPerSecond = feedRate },
+        new { Thread = "Risk", MessagesPerSecond = processedRate },
+        new { Thread = "Routing", MessagesPerSecond = processedRate },
+        new { Thread = "UI Coalescer", MessagesPerSecond = processor.SnapshotsPerSec }
+    });
+});
+
 app.MapGet("/api/ticks/recent", (LosslessTickStore tickStore, int count = 1000) =>
     Results.Ok(tickStore.GetRecentTicks(count)));
 
@@ -83,6 +100,8 @@ app.MapPost("/api/orders", async (Order order, ExchangeSimulator exchange, Cance
 });
 
 app.MapGet("/api/orders", (ExchangeSimulator exchange) => Results.Ok(exchange.GetOrders()));
+
+app.MapGet("/api/trade-monitor", (ExchangeSimulator exchange) => Results.Ok(exchange.GetTradeMonitor()));
 
 app.MapGet("/api/orders/open", (ExchangeSimulator exchange) => Results.Ok(exchange.GetOpenOrders()));
 

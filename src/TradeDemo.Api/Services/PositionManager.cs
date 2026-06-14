@@ -7,7 +7,6 @@ namespace TradeDemo.Api.Services;
 
 public class PositionManager
 {
-    private const decimal ES_CONTRACT_MULTIPLIER = 50m; // $50 per point per ES contract
     private readonly ConcurrentDictionary<string, PositionState> _positions = new();
     private readonly object _sync = new();
 
@@ -38,7 +37,7 @@ public class PositionManager
             var current = _positions.TryGetValue(symbol, out var existing) ? existing : new PositionState();
             var signedQuantity = quantity;
             var newQuantity = current.Quantity + signedQuantity;
-            var realizedPnl = CalculateRealizedPnl(current, signedQuantity, price) * ES_CONTRACT_MULTIPLIER;
+            var realizedPnl = CalculateRealizedPnl(current, signedQuantity, price) * ContractMultiplier(symbol);
             var averagePrice = CalculateAveragePrice(current, signedQuantity, price, newQuantity);
 
             current = new PositionState
@@ -154,8 +153,11 @@ public class PositionManager
             AveragePrice: state.AveragePrice,
             MarkPrice: state.MarkPrice,
             RealizedPnl: state.RealizedPnl,
-            UnrealizedPnl: (state.MarkPrice - state.AveragePrice) * state.Quantity * ES_CONTRACT_MULTIPLIER,
+            UnrealizedPnl: (state.MarkPrice - state.AveragePrice) * state.Quantity * ContractMultiplier(symbol),
             UpdatedAt: state.UpdatedAt);
+
+    private static decimal ContractMultiplier(string symbol) =>
+        symbol.Equals("ES", StringComparison.OrdinalIgnoreCase) || symbol.Equals("NQ", StringComparison.OrdinalIgnoreCase) ? 50m : 1m;
 
     private sealed record PositionState
     {

@@ -6,7 +6,6 @@ namespace TradeDemo.Api.Services;
 public sealed class ExchangeSimulator
 {
     private const decimal EsTickSize = 0.25m;
-    private const decimal EsContractMultiplier = 50m;
     private const int MarketMakerInventoryLimit = 100;
     private const int MarketMakerWarningThreshold = 75;
     private static readonly TimeSpan SimulatedHop = TimeSpan.FromMilliseconds(2);
@@ -19,6 +18,7 @@ public sealed class ExchangeSimulator
     private readonly Dictionary<Guid, List<OrderLifecycleEvent>> _lifecycleByOrderId = [];
     private readonly Dictionary<string, DepthBookState> _depthBySymbol = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, int> _marketMakerInventoryBySymbol = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<Guid, OrderTelemetry> _telemetryByOrderId = [];
     private readonly List<double> _latenciesMs = [];
 
     public ExchangeSimulator(RiskEngine riskEngine, PositionManager positionManager)
@@ -58,10 +58,10 @@ public sealed class ExchangeSimulator
                 UpdatedAt = DateTime.UtcNow,
                 RejectReason = risk.RejectReason
             };
-            AddLifecycle(lifecycle, rejected, "Rejected", risk.RejectReason ?? "Risk check rejected order");
+            AddLifecycle(lifecycle, rejected, "Risk Reject", risk.RejectReason ?? "Risk check rejected order");
             reports.Add(NewReport(rejected, "Rejected", risk.RejectReason ?? "Risk check rejected order"));
             var rejectedLatency = BuildLatency(order.OrderId, riskMs, routeMs, exchangeMs, fillMs);
-            Save(rejected, reports, lifecycle, sw.Elapsed.TotalMilliseconds);
+            Save(rejected, reports, lifecycle, sw.Elapsed.TotalMilliseconds, "RISK", rejectedLatency);
             return BuildResult(rejected, reports, fills, position, lifecycle, preTradeDepth, rejectedLatency);
         }
 
@@ -69,8 +69,9 @@ public sealed class ExchangeSimulator
 
         await Task.Delay(SimulatedHop, ct);
         routeMs = SimulatedLatency(order.OrderId, 2, 1.4, 3.2);
+        var venue = RouteFor(order.Symbol);
 
-        AddLifecycle(lifecycle, order, "Routed", $"Routed to {RouteFor(order.Symbol)} ({routeMs:F1}ms)");
+        AddLifecycle(lifecycle, order, "Routed", $"Routed to {venue} ({routeMs:F1}ms)");
 
         await Task.Delay(SimulatedHop, ct);
         exchangeMs = SimulatedLatency(order.OrderId, 3, 3.5, 9.5);
@@ -83,7 +84,6 @@ public sealed class ExchangeSimulator
         };
         AddLifecycle(lifecycle, accepted, "Accepted", $"Accepted ({exchangeMs:F1}ms)");
         reports.Add(NewReport(accepted, "Accepted", "Order accepted by exchange simulator"));
-        Save(accepted, reports[^1], lifecycle.Last());
 
         await Task.Delay(SimulatedHop, ct);
 
@@ -93,7 +93,7 @@ public sealed class ExchangeSimulator
             AddLifecycle(lifecycle, working, "Working", $"Resting {working.Side} {working.RemainingQuantity:N0} {working.Symbol} @ {FormatOrderPrice(working)}");
             reports.Add(NewReport(working, "Working", "Order resting in open-orders book"));
             var workingLatency = BuildLatency(order.OrderId, riskMs, routeMs, exchangeMs, fillMs);
-            Save(working, reports[^1], lifecycle.Last(), sw.Elapsed.TotalMilliseconds);
+            Save(working, reports, lifecycle, sw.Elapsed.TotalMilliseconds, venue, workingLatency);
             return BuildResult(working, reports, fills, position, lifecycle, preTradeDepth, workingLatency);
         }
 
@@ -126,7 +126,7 @@ public sealed class ExchangeSimulator
             filledOrder.Status == "Filled" ? $"Order Fully Filled ({fillMs:F1}ms)" : $"Working {filledOrder.RemainingQuantity:N0} remaining");
         reports.Add(NewReport(filledOrder, filledOrder.Status, lifecycle[^1].Message, null, filledOrder.FilledQuantity, filledOrder.RemainingQuantity, filledOrder.AverageFillPrice));
         var latency = BuildLatency(order.OrderId, riskMs, routeMs, exchangeMs, fillMs);
-        Save(filledOrder, reports[^1], lifecycle.Last(), sw.Elapsed.TotalMilliseconds);
+        Save(filledOrder, reports, lifecycle, sw.Elapsed.TotalMilliseconds, venue, latency);
 
         var depth = GetDepth(filledOrder.Symbol);
         if (position is not null)
@@ -161,6 +161,17 @@ public sealed class ExchangeSimulator
         lock (_sync)
         {
             return _executions.OrderByDescending(e => e.Timestamp).ToArray();
+        }
+    }
+
+    public IReadOnlyList<TradeMonitorRow> GetTradeMonitor()
+    {
+        lock (_sync)
+        {
+            return _orders
+                .OrderByDescending(o => o.UpdatedAt ?? o.CreatedAt)
+                .Select(ToTradeMonitorRowUnsafe)
+                .ToArray();
         }
     }
 
@@ -283,6 +294,7 @@ public sealed class ExchangeSimulator
             _lifecycleByOrderId.Clear();
             _depthBySymbol.Clear();
             _marketMakerInventoryBySymbol.Clear();
+            _telemetryByOrderId.Clear();
             _latenciesMs.Clear();
             _positionManager.Reset();
         }
@@ -445,6 +457,58 @@ public sealed class ExchangeSimulator
     private OrderResult BuildResult(Order order, List<ExecutionReport> reports, List<Fill> fills, Position? position, List<OrderLifecycleEvent> lifecycle, DepthSnapshot depth, LatencyBreakdown? latency = null, SlippageMetrics? slippage = null) =>
         new(order, reports, fills.LastOrDefault(), position, lifecycle, fills, fills, depth, GetExecutionStats(), latency, slippage);
 
+    private TradeMonitorRow ToTradeMonitorRowUnsafe(Order order)
+    {
+        _telemetryByOrderId.TryGetValue(order.OrderId, out var telemetry);
+        var latencyMs = telemetry?.Latency?.TotalMs;
+        var fillPercent = order.Quantity <= 0 ? 0 : (double)order.FilledQuantity / order.Quantity * 100.0;
+        var pnl = CalculateOrderPnlUnsafe(order);
+        var updatedAt = order.UpdatedAt ?? order.CreatedAt;
+
+        return new TradeMonitorRow(
+            OrderId: order.OrderId,
+            Symbol: order.Symbol,
+            Status: order.Status,
+            Venue: telemetry?.Venue ?? RouteFor(order.Symbol),
+            LatencyMs: latencyMs,
+            FillPercent: fillPercent,
+            PnL: pnl,
+            Health: DetermineHealth(order, latencyMs, updatedAt),
+            UpdatedAt: updatedAt);
+    }
+
+    private decimal CalculateOrderPnlUnsafe(Order order)
+    {
+        if (order.FilledQuantity <= 0 || order.AverageFillPrice is null)
+        {
+            return 0m;
+        }
+
+        var mark = GetDepthUnsafe(order.Symbol).MidPrice;
+        var direction = order.Side.Equals("BUY", StringComparison.OrdinalIgnoreCase) ? 1m : -1m;
+        return (mark - order.AverageFillPrice.Value) * order.FilledQuantity * ContractMultiplier(order.Symbol) * direction;
+    }
+
+    private static string DetermineHealth(Order order, double? latencyMs, DateTime updatedAt)
+    {
+        if (order.Status is "Rejected" or "CancelRejected" or "ModifyRejected")
+        {
+            return "Abnormal";
+        }
+
+        if (latencyMs >= 75)
+        {
+            return "Abnormal";
+        }
+
+        if (latencyMs >= 50 || order.Status == "PartiallyFilled" || (IsOpen(order) && DateTime.UtcNow - updatedAt > TimeSpan.FromSeconds(30)))
+        {
+            return "Slow";
+        }
+
+        return "Healthy";
+    }
+
     private static SlippageMetrics? BuildSlippage(Order order, FillComputation fillResult, decimal arrivalPrice)
     {
         if (fillResult.AverageFillPrice is null || fillResult.FilledQuantity == 0)
@@ -456,10 +520,13 @@ public sealed class ExchangeSimulator
         var slippagePoints = order.Side.Equals("BUY", StringComparison.OrdinalIgnoreCase)
             ? averageFillPrice - arrivalPrice
             : arrivalPrice - averageFillPrice;
-        var slippageDollars = slippagePoints * fillResult.FilledQuantity * EsContractMultiplier;
+        var slippageDollars = slippagePoints * fillResult.FilledQuantity * ContractMultiplier(order.Symbol);
 
-        return new SlippageMetrics(arrivalPrice, averageFillPrice, slippagePoints, slippageDollars);
+        return new SlippageMetrics(arrivalPrice, averageFillPrice, slippagePoints, slippageDollars, order.Symbol);
     }
+
+    private static decimal ContractMultiplier(string symbol) =>
+        symbol.Equals("ES", StringComparison.OrdinalIgnoreCase) || symbol.Equals("NQ", StringComparison.OrdinalIgnoreCase) ? 50m : 1m;
 
     private DepthSnapshot GetDepthUnsafe(string symbol)
     {
@@ -571,7 +638,7 @@ public sealed class ExchangeSimulator
         Timestamp: DateTime.UtcNow,
         Sequence: book.Sequence);
 
-    private void Save(Order order, IReadOnlyList<ExecutionReport> reports, IReadOnlyList<OrderLifecycleEvent> lifecycle, double? latencyMs = null)
+    private void Save(Order order, IReadOnlyList<ExecutionReport> reports, IReadOnlyList<OrderLifecycleEvent> lifecycle, double? latencyMs = null, string? venue = null, LatencyBreakdown? latency = null)
     {
         lock (_sync)
         {
@@ -584,6 +651,7 @@ public sealed class ExchangeSimulator
                 AddLifecycleUnsafe(evt);
             }
             SaveOrderUnsafe(order);
+            SaveTelemetryUnsafe(order, venue, latency);
             if (latencyMs is not null)
             {
                 _latenciesMs.Add(latencyMs.Value);
@@ -608,6 +676,23 @@ public sealed class ExchangeSimulator
         _executions.Add(report);
         AddLifecycleUnsafe(evt);
         SaveOrderUnsafe(order);
+        SaveTelemetryUnsafe(order, null, null);
+    }
+
+    private void SaveTelemetryUnsafe(Order order, string? venue, LatencyBreakdown? latency)
+    {
+        if (_telemetryByOrderId.TryGetValue(order.OrderId, out var existing))
+        {
+            _telemetryByOrderId[order.OrderId] = existing with
+            {
+                Venue = venue ?? existing.Venue,
+                Latency = latency ?? existing.Latency,
+                UpdatedAt = DateTime.UtcNow
+            };
+            return;
+        }
+
+        _telemetryByOrderId[order.OrderId] = new OrderTelemetry(venue ?? RouteFor(order.Symbol), latency, DateTime.UtcNow);
     }
 
     private void SaveOrderUnsafe(Order order)
@@ -637,7 +722,7 @@ public sealed class ExchangeSimulator
         lifecycle.Add(NewLifecycle(order, stage, message, quantity, price));
 
     private static OrderLifecycleEvent NewLifecycle(Order order, string stage, string message, int? quantity = null, decimal? price = null) =>
-        new(Guid.NewGuid(), order.OrderId, stage, message, DateTime.UtcNow, quantity, price);
+        new(Guid.NewGuid(), order.OrderId, stage, message, DateTime.UtcNow, quantity, price, order.Symbol);
 
     private static LatencyBreakdown BuildLatency(Guid orderId, double riskMs, double routeMs, double exchangeMs, double fillMs)
     {
@@ -702,7 +787,13 @@ public sealed class ExchangeSimulator
             ? "Market"
             : order.LimitPrice?.ToString("N2") ?? "Limit";
 
-    private static string RouteFor(string symbol) => symbol.Equals("ES", StringComparison.OrdinalIgnoreCase) ? "CME" : "SIMEX";
+    private static string RouteFor(string symbol) => symbol.ToUpperInvariant() switch
+    {
+        "ES" or "NQ" => "CME",
+        "AAPL" or "MSFT" or "GOOGL" or "AMZN" or "TSLA" or "NVDA" or "META" => "NASDAQ",
+        "JPM" or "GS" or "BAC" or "V" or "BRK.B" => "NYSE",
+        _ => "SIMEX"
+    };
 
     private static decimal GetReferencePrice(string symbol) => symbol.ToUpperInvariant() switch
     {
@@ -710,12 +801,23 @@ public sealed class ExchangeSimulator
         "NQ" => 21850.50m,
         "AAPL" => 195.50m,
         "MSFT" => 430.20m,
+        "GOOGL" => 178.90m,
+        "AMZN" => 185.60m,
+        "TSLA" => 250.10m,
+        "JPM" => 198.30m,
+        "GS" => 465.80m,
+        "BAC" => 38.90m,
+        "V" => 278.40m,
+        "BRK.B" => 415.70m,
         "NVDA" => 950.00m,
+        "META" => 480.30m,
         "BTC-USD" => 68500.00m,
         _ => 100.00m
     };
 
     private sealed record FillComputation(int FilledQuantity, int RemainingQuantity, decimal? AverageFillPrice);
+
+    private sealed record OrderTelemetry(string Venue, LatencyBreakdown? Latency, DateTime UpdatedAt);
 
     private sealed record DepthBookState(
         string Symbol,
