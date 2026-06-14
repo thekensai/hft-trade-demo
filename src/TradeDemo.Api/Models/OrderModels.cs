@@ -103,6 +103,13 @@ public sealed record LatencyBreakdown(
     double TotalMs
 );
 
+public sealed record SlippageMetrics(
+    decimal ArrivalPrice,
+    decimal AverageFillPrice,
+    decimal SlippagePoints,
+    decimal SlippageDollars
+);
+
 public sealed record MarketMakerState(
     int Inventory,
     int InventoryLimit,
@@ -127,5 +134,6 @@ public sealed record OrderResult(
     IReadOnlyList<Fill>? ConsumedLiquidity = null,
     DepthSnapshot? Depth = null,
     ExecutionStats? Stats = null,
-    LatencyBreakdown? Latency = null
+    LatencyBreakdown? Latency = null,
+    SlippageMetrics? Slippage = null
 );

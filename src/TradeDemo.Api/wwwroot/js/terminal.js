@@ -38,10 +38,14 @@ const state = {
     maxConsumedFills: 50,
     maxLifecycleRows: 80,
     lifecycleEventIds: new Set(),
+    latestMarketMakerState: null,
     currentPosition: 0,
     maxPosition: 1000,
     manualOrderQuantity: 100,
     orderSubmitInFlight: false,
+    demoResetInFlight: false,
+    latestLatency: null,
+    latestSlippage: null,
 };
 
 // ── DOM refs ──
@@ -70,6 +74,7 @@ const dom = {
     rateGraph: document.getElementById("rateGraph"),
     rateTimeAxis: document.getElementById("rateTimeAxis"),
     buyEsButton: document.getElementById("buyEsButton"),
+    resetDemoButton: document.getElementById("resetDemoButton"),
     marketMakerToggle: document.getElementById("marketMakerToggle"),
     depthBook: document.getElementById("depthBook"),
     consumedLiquidity: document.getElementById("consumedLiquidity"),
@@ -85,6 +90,8 @@ const dom = {
     execCancels: document.getElementById("execCancels"),
     execFillRatio: document.getElementById("execFillRatio"),
     execPnl: document.getElementById("execPnl"),
+    slipArrival: document.getElementById("slipArrival"),
+    slipValue: document.getElementById("slipValue"),
     latTotal: document.getElementById("latTotal"),
     latRisk: document.getElementById("latRisk"),
     latRoute: document.getElementById("latRoute"),
@@ -684,9 +691,12 @@ async function forceReconnect(reason) {
     }
 }
 
-start();
+initializeDemo();
 
 // ── Order ticket ──
+dom.resetDemoButton?.addEventListener("click", () => resetDemo());
+dom.marketMakerToggle?.addEventListener("change", () => renderMarketMakerState(state.latestMarketMakerState));
+
 dom.buyEsButton?.addEventListener("click", async () => {
     if (isBuyLimitReached()) {
         updateBuyButtonState();
@@ -702,6 +712,72 @@ dom.buyEsButton?.addEventListener("click", async () => {
         useMarketMakerLiquidity: dom.marketMakerToggle?.checked ?? false,
     });
 });
+
+async function initializeDemo() {
+    await resetDemo({ automatic: true });
+    await start();
+}
+
+async function resetDemo({ automatic = false } = {}) {
+    try {
+        state.demoResetInFlight = true;
+        if (dom.resetDemoButton) {
+            dom.resetDemoButton.disabled = true;
+            dom.resetDemoButton.textContent = automatic ? "RESETTING..." : "RESETTING";
+        }
+
+        const response = await fetch("/api/demo/reset", { method: "POST" });
+        if (!response.ok) throw new Error(`Reset failed: ${response.status}`);
+        resetDemoUi();
+        await refreshTradingPanels();
+    } catch (err) {
+        console.error("Demo reset failed:", err);
+        addLifecycleMessage("Rejected", err.message || "Demo reset failed");
+    } finally {
+        state.demoResetInFlight = false;
+        if (dom.resetDemoButton) {
+            dom.resetDemoButton.disabled = false;
+            dom.resetDemoButton.textContent = "RESET DEMO";
+        }
+        updateBuyButtonState();
+    }
+}
+
+function resetDemoUi() {
+    state.currentPosition = 0;
+    state.lastConsumedFills = [];
+    state.latestLatency = null;
+    state.latestSlippage = null;
+    state.consumedFillIds.clear();
+    state.lifecycleEventIds.clear();
+    setText(dom.consumedLiquidity, "Recent consumed: —");
+    setText(dom.avgFillBadge, "FILL AVG —");
+    renderPosition(null);
+    renderExecutionStats({ ordersSent: 0, ordersFilled: 0, cancels: 0, fillRatio: 0, pnl: 0 });
+    resetSlippageStats();
+    resetLatencyStats();
+    if (dom.orderLifecycle) {
+        dom.orderLifecycle.innerHTML = `<div class="lifecycle-row muted">Ready — submit BUY 100 ES @ MKT</div>`;
+    }
+    if (dom.openOrders) {
+        dom.openOrders.textContent = "No recent orders";
+    }
+}
+
+function resetSlippageStats() {
+    setText(dom.slipArrival, "—");
+    setText(dom.slipValue, "—");
+    dom.slipValue?.classList.remove("positive", "negative");
+}
+
+function resetLatencyStats() {
+    setText(dom.latTotal, "0ms");
+    setText(dom.latRisk, "0ms");
+    setText(dom.latRoute, "0ms");
+    setText(dom.latExchange, "0ms");
+    setText(dom.latFill, "0ms");
+    setText(dom.latOther, "0ms");
+}
 
 async function submitOrder(order) {
     try {
@@ -728,6 +804,7 @@ function renderOrderResult(result) {
     appendLifecycle(result.lifecycleEvents ?? []);
     if (result.depth) renderDepth(result.depth, result.consumedLiquidity ?? result.fills ?? []);
     if (result.position) renderPosition(result.position);
+    if (result.slippage) renderSlippageStats(result.slippage);
     if (result.stats) renderExecutionStats(result.stats, result.latency);
 }
 
@@ -738,6 +815,7 @@ async function refreshTradingPanels() {
         refreshOpenOrders(),
         refreshExecutionStats(),
         refreshMarketMakerState(),
+        refreshLifecycle(),
     ]);
 }
 
@@ -757,8 +835,8 @@ async function refreshPositions() {
 
 async function refreshOpenOrders() {
     if (!dom.openOrders) return;
-    const response = await fetch("/api/orders/open");
-    if (response.ok) renderOpenOrders(await response.json());
+    const response = await fetch("/api/orders");
+    if (response.ok) renderRecentOrders(await response.json());
 }
 
 async function refreshExecutionStats() {
@@ -769,6 +847,12 @@ async function refreshExecutionStats() {
 async function refreshMarketMakerState() {
     const response = await fetch("/api/market-maker/state");
     if (response.ok) renderMarketMakerState(await response.json());
+}
+
+async function refreshLifecycle() {
+    if (!dom.orderLifecycle || state.lifecycleEventIds.size > 0) return;
+    const response = await fetch(`/api/lifecycle/recent?count=${state.maxLifecycleRows}`);
+    if (response.ok) appendLifecycle(await response.json());
 }
 
 function renderDepth(depth, fills = []) {
@@ -842,11 +926,11 @@ function appendLifecycle(events) {
         const id = evt.eventId ?? `${evt.orderId}-${evt.stage}-${evt.timestamp}`;
         if (state.lifecycleEventIds.has(id)) continue;
         state.lifecycleEventIds.add(id);
-        dom.orderLifecycle.insertAdjacentHTML("afterbegin", lifecycleRow(evt));
+        dom.orderLifecycle.insertAdjacentHTML("beforeend", lifecycleRow(evt));
     }
 
     while (dom.orderLifecycle.children.length > state.maxLifecycleRows) {
-        const row = dom.orderLifecycle.lastElementChild;
+        const row = dom.orderLifecycle.firstElementChild;
         const id = row?.dataset.eventId;
         if (id) state.lifecycleEventIds.delete(id);
         row?.remove();
@@ -856,8 +940,8 @@ function appendLifecycle(events) {
 function addLifecycleMessage(stage, message) {
     if (!dom.orderLifecycle) return;
     dom.orderLifecycle.querySelector(".lifecycle-row.muted")?.remove();
-    dom.orderLifecycle.insertAdjacentHTML("afterbegin", lifecycleRow({ stage, message, timestamp: new Date().toISOString() }));
-    while (dom.orderLifecycle.children.length > state.maxLifecycleRows) dom.orderLifecycle.lastElementChild.remove();
+    dom.orderLifecycle.insertAdjacentHTML("beforeend", lifecycleRow({ stage, message, timestamp: new Date().toISOString() }));
+    while (dom.orderLifecycle.children.length > state.maxLifecycleRows) dom.orderLifecycle.firstElementChild.remove();
 }
 
 function lifecycleRow(evt) {
@@ -884,6 +968,12 @@ function renderPosition(position) {
 function updateBuyButtonState() {
     if (!dom.buyEsButton) return;
 
+    if (state.demoResetInFlight) {
+        dom.buyEsButton.disabled = true;
+        dom.buyEsButton.textContent = "RESETTING DEMO...";
+        return;
+    }
+
     if (state.orderSubmitInFlight) {
         dom.buyEsButton.disabled = true;
         dom.buyEsButton.textContent = "SENDING BUY 100 ES...";
@@ -904,22 +994,38 @@ function isBuyLimitReached() {
     return state.currentPosition + state.manualOrderQuantity > state.maxPosition;
 }
 
-function renderOpenOrders(orders) {
+function renderRecentOrders(orders) {
     if (!dom.openOrders) return;
     if (!orders || orders.length === 0) {
-        dom.openOrders.textContent = "No open orders";
+        dom.openOrders.textContent = "No recent orders";
         return;
     }
-    dom.openOrders.innerHTML = orders.slice(0, 8).map((order) => `<div class="open-order-row">
-        <span>${order.symbol}</span>
-        <span>${order.side}</span>
-        <span>${Number(order.remainingQuantity).toLocaleString()} @ ${order.limitPrice == null ? "MKT" : formatPrice(order.limitPrice)}</span>
-        <span>${order.status}</span>
-        <button class="mini-action-button" type="button" data-cancel-order="${order.orderId}">Cancel</button>
-    </div>`).join("");
+    dom.openOrders.innerHTML = orders.slice(0, 8).map((order) => {
+        const quantity = Number(order.filledQuantity || order.quantity).toLocaleString();
+        const price = order.averageFillPrice == null ? formatOrderPrice(order) : `avg ${formatPrice(order.averageFillPrice)}`;
+        const action = isOpenOrder(order)
+            ? `<button class="mini-action-button" type="button" data-cancel-order="${order.orderId}">Cancel</button>`
+            : `<span></span>`;
+
+        return `<div class="open-order-row">
+            <span>${order.symbol}</span>
+            <span>${order.side}</span>
+            <span>${quantity} ${price}</span>
+            <span>${order.status}</span>
+            ${action}
+        </div>`;
+    }).join("");
     dom.openOrders.querySelectorAll("[data-cancel-order]").forEach((button) => {
         button.addEventListener("click", () => cancelOrder(button.dataset.cancelOrder));
     });
+}
+
+function formatOrderPrice(order) {
+    return order.limitPrice == null ? "MKT" : formatPrice(order.limitPrice);
+}
+
+function isOpenOrder(order) {
+    return Number(order.remainingQuantity) > 0 && ["New", "Accepted", "Working", "PartiallyFilled"].includes(order.status);
 }
 
 async function cancelOrder(orderId) {
@@ -928,14 +1034,44 @@ async function cancelOrder(orderId) {
     await refreshTradingPanels();
 }
 
+function renderSlippageStats(slippage) {
+    state.latestSlippage = slippage ?? null;
+    if (!state.latestSlippage) {
+        resetSlippageStats();
+        return;
+    }
+
+    const points = Number(state.latestSlippage.slippagePoints);
+    const dollars = Number(state.latestSlippage.slippageDollars);
+    setText(dom.slipArrival, formatPrice(state.latestSlippage.arrivalPrice));
+    setText(dom.slipValue, `${points >= 0 ? "+" : ""}${points.toFixed(2)} pts / ${dollars < 0 ? "-$" : "+$"}${Math.abs(dollars).toLocaleString(undefined, { maximumFractionDigits: 0 })}`);
+    dom.slipValue?.classList.toggle("negative", points > 0);
+    dom.slipValue?.classList.toggle("positive", points < 0);
+}
+
 function renderExecutionStats(stats, latency) {
     if (!stats) return;
     setText(dom.execOrdersSent, Number(stats.ordersSent).toLocaleString());
     setText(dom.execOrdersFilled, Number(stats.ordersFilled).toLocaleString());
     setText(dom.execCancels, Number(stats.cancels).toLocaleString());
     setText(dom.execFillRatio, `${Number(stats.fillRatio).toFixed(0)}%`);
-    setMoney(dom.execPnl, stats.pnl);
-    if (!latency) return;
+    setMoney(dom.execPnl, stats.pnl ?? stats.pnL);
+
+    if (latency) {
+        state.latestLatency = latency;
+    } else if (Number(stats.ordersSent) === 0) {
+        state.latestLatency = null;
+    }
+
+    renderLatencyStats(state.latestLatency);
+}
+
+function renderLatencyStats(latency) {
+    if (!latency) {
+        resetLatencyStats();
+        return;
+    }
+
     setText(dom.latTotal, `${Number(latency.totalMs).toFixed(1)}ms`);
     setText(dom.latRisk, `${Number(latency.riskCheckMs).toFixed(1)}ms`);
     setText(dom.latRoute, `${Number(latency.routeMs).toFixed(1)}ms`);
@@ -946,6 +1082,17 @@ function renderExecutionStats(stats, latency) {
 
 function renderMarketMakerState(mm) {
     if (!mm) return;
+    state.latestMarketMakerState = mm;
+
+    if (!(dom.marketMakerToggle?.checked ?? false)) {
+        setText(dom.mmInventory, "—");
+        setText(dom.mmInventoryLimit, Number(mm.inventoryLimit).toLocaleString());
+        setText(dom.mmStatus, "OFF");
+        setText(dom.mmQuotes, "—/—");
+        dom.mmStatus?.classList.remove("danger", "warning");
+        return;
+    }
+
     setText(dom.mmInventory, Number(mm.inventory).toLocaleString());
     setText(dom.mmInventoryLimit, Number(mm.inventoryLimit).toLocaleString());
     setText(dom.mmStatus, mm.status);

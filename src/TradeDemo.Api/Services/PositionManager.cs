@@ -8,13 +8,28 @@ namespace TradeDemo.Api.Services;
 public class PositionManager
 {
     private const decimal ES_CONTRACT_MULTIPLIER = 50m; // $50 per point per ES contract
-    private const bool DEMO_MARK_MODE = true;
-    private const decimal DEMO_PNL_PER_100_CONTRACTS = 34m;
     private readonly ConcurrentDictionary<string, PositionState> _positions = new();
     private readonly object _sync = new();
 
     // Backward compatible overload for existing call
-    public Position ApplyFill(Fill fill) => ApplyFill(fill.Symbol, fill.Quantity, fill.Price);
+    public Position ApplyFill(Fill fill) => ApplyFill(fill.Symbol, SignedQuantity(fill), fill.Price);
+
+    public Position ApplyFills(IReadOnlyList<Fill> fills)
+    {
+        var first = fills[0];
+        var quantity = 0;
+        var notional = 0m;
+        for (var i = 0; i < fills.Count; i++)
+        {
+            quantity += fills[i].Quantity;
+            notional += fills[i].Quantity * fills[i].Price;
+        }
+
+        var averagePrice = notional / quantity;
+        var signedQuantity = first.Side.Equals("SELL", StringComparison.OrdinalIgnoreCase) ? -quantity : quantity;
+
+        return ApplyFill(first.Symbol, signedQuantity, averagePrice);
+    }
 
     public Position ApplyFill(string symbol, int quantity, decimal price)
     {
@@ -47,7 +62,11 @@ public class PositionManager
     {
         lock (_sync)
         {
-            var current = _positions.TryGetValue(symbol, out var existing) ? existing : new PositionState();
+            if (!_positions.TryGetValue(symbol, out var current))
+            {
+                return ToPosition(symbol, new PositionState { MarkPrice = markPrice });
+            }
+
             current = new PositionState
             {
                 Quantity = current.Quantity,
@@ -81,6 +100,17 @@ public class PositionManager
                 : null;
         }
     }
+
+    public void Reset()
+    {
+        lock (_sync)
+        {
+            _positions.Clear();
+        }
+    }
+
+    private static int SignedQuantity(Fill fill) =>
+        fill.Side.Equals("SELL", StringComparison.OrdinalIgnoreCase) ? -fill.Quantity : fill.Quantity;
 
     private static decimal CalculateRealizedPnl(PositionState current, int signedQuantity, decimal fillPrice)
     {
@@ -117,30 +147,15 @@ public class PositionManager
         return current.AveragePrice;
     }
 
-    private static Position ToPosition(string symbol, PositionState state)
-    {
-        var markPrice = DEMO_MARK_MODE ? GetDemoMarkPrice(state) : state.MarkPrice;
-        return new Position(
+    private static Position ToPosition(string symbol, PositionState state) =>
+        new(
             Symbol: symbol,
             Quantity: state.Quantity,
             AveragePrice: state.AveragePrice,
-            MarkPrice: markPrice,
+            MarkPrice: state.MarkPrice,
             RealizedPnl: state.RealizedPnl,
-            UnrealizedPnl: (markPrice - state.AveragePrice) * state.Quantity * ES_CONTRACT_MULTIPLIER,
+            UnrealizedPnl: (state.MarkPrice - state.AveragePrice) * state.Quantity * ES_CONTRACT_MULTIPLIER,
             UpdatedAt: state.UpdatedAt);
-    }
-
-    private static decimal GetDemoMarkPrice(PositionState state)
-    {
-        if (state.Quantity == 0 || state.AveragePrice == 0)
-        {
-            return state.MarkPrice;
-        }
-
-        var targetPnl = Math.Abs(state.Quantity) / 100m * DEMO_PNL_PER_100_CONTRACTS;
-        var direction = Math.Sign(state.Quantity);
-        return state.AveragePrice + direction * targetPnl / (Math.Abs(state.Quantity) * ES_CONTRACT_MULTIPLIER);
-    }
 
     private sealed record PositionState
     {

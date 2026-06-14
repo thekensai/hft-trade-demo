@@ -86,6 +86,12 @@ app.MapGet("/api/orders", (ExchangeSimulator exchange) => Results.Ok(exchange.Ge
 
 app.MapGet("/api/orders/open", (ExchangeSimulator exchange) => Results.Ok(exchange.GetOpenOrders()));
 
+app.MapPost("/api/demo/reset", (ExchangeSimulator exchange) =>
+{
+    exchange.ResetDemo();
+    return Results.Ok(new { Reset = true });
+});
+
 app.MapDelete("/api/orders/{orderId:guid}", (ExchangeSimulator exchange, Guid orderId) =>
 {
     var result = exchange.CancelOrder(orderId);
@@ -109,6 +115,8 @@ app.MapPut("/api/orders/{orderId:guid}", async (ExchangeSimulator exchange, Guid
 });
 
 app.MapGet("/api/executions", (ExchangeSimulator exchange) => Results.Ok(exchange.GetExecutions()));
+
+app.MapGet("/api/lifecycle/recent", (ExchangeSimulator exchange, int count = 80) => Results.Ok(exchange.GetRecentLifecycleEvents(count)));
 
 app.MapGet("/api/execution-stats", (ExchangeSimulator exchange) => Results.Ok(exchange.GetExecutionStats()));
 

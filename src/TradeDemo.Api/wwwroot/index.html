@@ -57,7 +57,10 @@
 
             <!-- Order Entry -->
             <section class="panel order-ticket-panel">
-                <div class="panel-title">ORDER ENTRY</div>
+                <div class="panel-title">
+                    ORDER ENTRY
+                    <button class="reset-demo-button" id="resetDemoButton" type="button">RESET DEMO</button>
+                </div>
                 <div class="order-ticket">
                     <button class="order-submit buy" id="buyEsButton" type="button">BUY 100 ES @ MKT</button>
                     <label class="market-maker-toggle">
@@ -119,10 +122,10 @@
                 </div>
             </section>
 
-            <!-- Open Orders -->
+            <!-- Recent Orders -->
             <section class="panel open-orders-panel">
-                <div class="panel-title">OPEN ORDERS</div>
-                <div class="open-orders" id="openOrders">No open orders</div>
+                <div class="panel-title">RECENT ORDERS</div>
+                <div class="open-orders" id="openOrders">No recent orders</div>
             </section>
 
             <!-- Execution Stats -->
@@ -134,12 +137,14 @@
                     <div><span>Cancels</span><strong id="execCancels">0</strong></div>
                     <div><span>Fill Ratio</span><strong id="execFillRatio">0%</strong></div>
                     <div><span>PnL</span><strong id="execPnl">$0</strong></div>
+                    <div><span>Arrival</span><strong id="slipArrival">—</strong></div>
+                    <div><span>Slippage</span><strong id="slipValue">—</strong></div>
                     <div><span>Total</span><strong id="latTotal">0ms</strong></div>
                     <div><span>Risk</span><strong id="latRisk">0ms</strong></div>
                     <div><span>Route</span><strong id="latRoute">0ms</strong></div>
                     <div><span>Exchange</span><strong id="latExchange">0ms</strong></div>
                     <div><span>Fill</span><strong id="latFill">0ms</strong></div>
-                    <div><span>Other</span><strong id="latOther">0ms</strong></div>
+                    <div><span>Overhead</span><strong id="latOther">0ms</strong></div>
                 </div>
             </section>
         </div>

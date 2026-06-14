@@ -6,6 +6,7 @@ namespace TradeDemo.Api.Services;
 public sealed class ExchangeSimulator
 {
     private const decimal EsTickSize = 0.25m;
+    private const decimal EsContractMultiplier = 50m;
     private const int MarketMakerInventoryLimit = 100;
     private const int MarketMakerWarningThreshold = 75;
     private static readonly TimeSpan SimulatedHop = TimeSpan.FromMilliseconds(2);
@@ -31,6 +32,7 @@ public sealed class ExchangeSimulator
         var sw = Stopwatch.StartNew();
         var order = NormalizeOrder(request);
         var preTradeDepth = GetDepth(order.Symbol);
+        var arrivalPrice = preTradeDepth.MidPrice;
         var lifecycle = new List<OrderLifecycleEvent>();
         var reports = new List<ExecutionReport>();
         var fills = new List<Fill>();
@@ -100,9 +102,12 @@ public sealed class ExchangeSimulator
 
         var fillStart = sw.Elapsed.TotalMilliseconds;
         var fillResult = FillAgainstDepth(accepted, lifecycle, reports, fills);
+        if (fills.Count > 0)
+        {
+            position = _positionManager.ApplyFills(fills);
+        }
         foreach (var fill in fills)
         {
-            position = _positionManager.ApplyFill(fill);
             ApplyMarketMakerInventory(fill);
             await Task.Delay(SimulatedHop, ct);
         }
@@ -127,7 +132,13 @@ public sealed class ExchangeSimulator
         var latency = BuildLatency(riskMs, routeMs, exchangeMs, fillMs, sw.Elapsed.TotalMilliseconds);
         Save(filledOrder, reports[^1], lifecycle.Last(), sw.Elapsed.TotalMilliseconds);
 
-        return BuildResult(filledOrder, reports, fills, position, lifecycle, GetDepth(filledOrder.Symbol), latency);
+        var depth = GetDepth(filledOrder.Symbol);
+        if (position is not null)
+        {
+            position = _positionManager.GetPosition(filledOrder.Symbol);
+        }
+
+        return BuildResult(filledOrder, reports, fills, position, lifecycle, depth, latency, BuildSlippage(filledOrder, fillResult, arrivalPrice));
     }
 
     public IReadOnlyList<Order> GetOrders()
@@ -254,8 +265,8 @@ public sealed class ExchangeSimulator
             Inventory: inventory,
             InventoryLimit: MarketMakerInventoryLimit,
             Status: status,
-            BidEnabled: inventory < MarketMakerWarningThreshold,
-            AskEnabled: inventory > -MarketMakerWarningThreshold,
+            BidEnabled: inventory < MarketMakerInventoryLimit,
+            AskEnabled: inventory > -MarketMakerInventoryLimit,
             UpdatedAt: DateTime.UtcNow);
     }
 
@@ -264,6 +275,33 @@ public sealed class ExchangeSimulator
         lock (_sync)
         {
             return GetLifecycleUnsafe(orderId);
+        }
+    }
+
+    public void ResetDemo()
+    {
+        lock (_sync)
+        {
+            _orders.Clear();
+            _executions.Clear();
+            _lifecycleByOrderId.Clear();
+            _depthBySymbol.Clear();
+            _marketMakerInventoryBySymbol.Clear();
+            _latenciesMs.Clear();
+            _positionManager.Reset();
+        }
+    }
+
+    public IReadOnlyList<OrderLifecycleEvent> GetRecentLifecycleEvents(int count = 80)
+    {
+        lock (_sync)
+        {
+            return _lifecycleByOrderId.Values
+                .SelectMany(events => events)
+                .OrderByDescending(evt => evt.Timestamp)
+                .Take(Math.Clamp(count, 1, 500))
+                .OrderBy(evt => evt.Timestamp)
+                .ToArray();
         }
     }
 
@@ -313,6 +351,7 @@ public sealed class ExchangeSimulator
             var remaining = order.RemainingQuantity > 0 ? order.RemainingQuantity : order.Quantity;
             var filled = order.FilledQuantity;
             var notional = (order.AverageFillPrice ?? 0m) * filled;
+            var notedMarketMakerUnavailable = false;
 
             for (var i = 0; i < levels.Count && remaining > 0;)
             {
@@ -323,7 +362,14 @@ public sealed class ExchangeSimulator
                 }
 
                 var quantity = Math.Min(remaining, level.Quantity);
-                var fillOwner = order.UseMarketMakerLiquidity ? "MarketMaker" : order.Owner;
+                var useMarketMaker = order.UseMarketMakerLiquidity && CanUseMarketMakerLiquidityUnsafe(order, quantity);
+                if (order.UseMarketMakerLiquidity && !useMarketMaker && !notedMarketMakerUnavailable)
+                {
+                    AddLifecycle(lifecycle, order, "MM Quote Disabled", $"MM {MarketMakerQuoteSide(order)} disabled — routed to regular book");
+                    notedMarketMakerUnavailable = true;
+                }
+
+                var fillOwner = useMarketMaker ? "MarketMaker" : order.Owner;
                 var fill = new Fill(Guid.NewGuid(), order.OrderId, order.Symbol, order.Side, quantity, level.Price, DateTime.UtcNow, fillOwner);
                 fills.Add(fill);
                 remaining -= quantity;
@@ -376,6 +422,17 @@ public sealed class ExchangeSimulator
     private int GetMarketMakerInventoryUnsafe(string symbol) =>
         _marketMakerInventoryBySymbol.TryGetValue(symbol, out var inventory) ? inventory : 0;
 
+    private bool CanUseMarketMakerLiquidityUnsafe(Order order, int quantity)
+    {
+        var inventory = GetMarketMakerInventoryUnsafe(order.Symbol);
+        return order.Side.Equals("BUY", StringComparison.OrdinalIgnoreCase)
+            ? inventory - quantity >= -MarketMakerInventoryLimit
+            : inventory + quantity <= MarketMakerInventoryLimit;
+    }
+
+    private static string MarketMakerQuoteSide(Order order) =>
+        order.Side.Equals("BUY", StringComparison.OrdinalIgnoreCase) ? "ask" : "bid";
+
     private static bool CanTradeAtLevel(Order order, decimal price)
     {
         if (order.OrderType.Equals("Market", StringComparison.OrdinalIgnoreCase) || order.LimitPrice is null)
@@ -388,8 +445,24 @@ public sealed class ExchangeSimulator
             : price >= order.LimitPrice;
     }
 
-    private OrderResult BuildResult(Order order, List<ExecutionReport> reports, List<Fill> fills, Position? position, List<OrderLifecycleEvent> lifecycle, DepthSnapshot depth, LatencyBreakdown? latency = null) =>
-        new(order, reports, fills.LastOrDefault(), position, lifecycle, fills, fills, depth, GetExecutionStats(), latency);
+    private OrderResult BuildResult(Order order, List<ExecutionReport> reports, List<Fill> fills, Position? position, List<OrderLifecycleEvent> lifecycle, DepthSnapshot depth, LatencyBreakdown? latency = null, SlippageMetrics? slippage = null) =>
+        new(order, reports, fills.LastOrDefault(), position, lifecycle, fills, fills, depth, GetExecutionStats(), latency, slippage);
+
+    private static SlippageMetrics? BuildSlippage(Order order, FillComputation fillResult, decimal arrivalPrice)
+    {
+        if (fillResult.AverageFillPrice is null || fillResult.FilledQuantity == 0)
+        {
+            return null;
+        }
+
+        var averageFillPrice = fillResult.AverageFillPrice.Value;
+        var slippagePoints = order.Side.Equals("BUY", StringComparison.OrdinalIgnoreCase)
+            ? averageFillPrice - arrivalPrice
+            : arrivalPrice - averageFillPrice;
+        var slippageDollars = slippagePoints * fillResult.FilledQuantity * EsContractMultiplier;
+
+        return new SlippageMetrics(arrivalPrice, averageFillPrice, slippagePoints, slippageDollars);
+    }
 
     private DepthSnapshot GetDepthUnsafe(string symbol)
     {
