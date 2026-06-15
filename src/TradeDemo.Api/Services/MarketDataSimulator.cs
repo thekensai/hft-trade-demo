@@ -21,9 +21,8 @@ namespace TradeDemo.Api.Services;
 public class MarketDataSimulator : BackgroundService
 {
     private readonly ILogger<MarketDataSimulator> _logger;
-    private readonly TradeQueueProcessor _queueProcessor;
+    private readonly IMarketDataBus _marketDataBus;
     private readonly GenerationStats _generationStats;
-    private readonly LosslessTickStore _tickStore;
     private readonly TickSequencer _sequencer;
     private static readonly Random _rng = new();
 
@@ -61,15 +60,13 @@ public class MarketDataSimulator : BackgroundService
 
     public MarketDataSimulator(
         ILogger<MarketDataSimulator> logger,
-        TradeQueueProcessor queueProcessor,
+        IMarketDataBus marketDataBus,
         GenerationStats generationStats,
-        LosslessTickStore tickStore,
         TickSequencer sequencer)
     {
         _logger = logger;
-        _queueProcessor = queueProcessor;
+        _marketDataBus = marketDataBus;
         _generationStats = generationStats;
-        _tickStore = tickStore;
         _sequencer = sequencer;
         _currentPrices = Instruments.Select(i => i.BasePrice).ToArray();
     }
@@ -77,9 +74,6 @@ public class MarketDataSimulator : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("MarketDataSimulator started - HIGH THROUGHPUT MODE targeting 1M+ events/sec, {Count} instruments", Instruments.Length);
-
-        // Use TryEnqueue to ensure the channel's enqueue counter increments
-        // (required for accurate dropped-count accounting under DropOldest).
 
         var throughputTimer = Stopwatch.StartNew();
         var lastLogTime = Stopwatch.GetTimestamp();
@@ -159,11 +153,10 @@ public class MarketDataSimulator : BackgroundService
                     SequenceId: _sequencer.Next()
                 );
 
-                // Split the pipeline immediately:
-                // - Lossless/replay path gets every accepted tick in sequence order.
-                // - UI path remains coalesced and browser-friendly.
-                _tickStore.TryAppend(signal);
-                _queueProcessor.TryEnqueue(signal);
+                // Publish once; subscribers keep their own channel semantics:
+                // - LosslessTickStore gets every accepted tick in sequence order.
+                // - TradeQueueProcessor remains coalesced and browser-friendly.
+                _marketDataBus.Publish(signal);
 
                 _generationStats.Increment();
             }
