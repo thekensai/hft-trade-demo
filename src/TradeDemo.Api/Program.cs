@@ -24,6 +24,9 @@ builder.Services.AddSingleton<TickSequencer>();
 builder.Services.AddSingleton<RiskEngine>();
 builder.Services.AddSingleton<PositionManager>();
 builder.Services.AddSingleton<ExchangeSimulator>();
+builder.Services.AddSingleton<OrderCommandQueue>();
+builder.Services.AddSingleton<IOrderCommandQueue>(sp => sp.GetRequiredService<OrderCommandQueue>());
+builder.Services.AddSingleton<IOrderCommandExecutor, ExchangeOrderCommandExecutor>();
 builder.Services.AddSingleton<LosslessTickStore>();
 builder.Services.AddSingleton<TradeQueueProcessor>();
 builder.Services.AddSingleton<IMarketDataSubscriber>(sp => sp.GetRequiredService<LosslessTickStore>());
@@ -31,6 +34,7 @@ builder.Services.AddSingleton<IMarketDataSubscriber>(sp => sp.GetRequiredService
 builder.Services.AddSingleton<IMarketDataBus, InMemoryMarketDataBus>();
 builder.Services.AddSingleton<MarketDataSimulator>();
 builder.Services.AddSingleton<ReplayEngine>();
+builder.Services.AddHostedService<OrderCommandProcessor>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<LosslessTickStore>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<MarketDataSimulator>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<TradeQueueProcessor>());
@@ -70,6 +74,8 @@ app.MapGet("/api/queue/stats", (TradeQueueProcessor processor, LosslessTickStore
     timestamp = DateTime.UtcNow
 }));
 
+app.MapGet("/api/orders/queue/stats", (IOrderCommandQueue orderQueue) => Results.Ok(orderQueue.GetStats()));
+
 app.MapGet("/api/concurrency/threads", (GenerationStats generationStats, TradeQueueProcessor processor) =>
 {
     var (_, feedRate) = generationStats.GetSnapshot();
@@ -96,10 +102,15 @@ app.MapGet("/api/system/metrics", (PerformanceMetrics metrics) => Results.Ok(met
 
 // ── Order Flow Endpoints ──
 
-app.MapPost("/api/orders", async (Order order, ExchangeSimulator exchange, CancellationToken ct) =>
+app.MapPost("/api/orders", async (Order order, IOrderCommandQueue orderQueue, CancellationToken ct) =>
 {
-    var result = await exchange.SubmitOrderAsync(order, ct);
-    return Results.Ok(result);
+    var outcome = await orderQueue.EnqueueAsync(new SubmitOrderCommand(order), ct);
+    return outcome.Status switch
+    {
+        OrderCommandOutcomeStatus.Completed => Results.Ok(outcome.Result),
+        OrderCommandOutcomeStatus.Canceled => Results.StatusCode(StatusCodes.Status499ClientClosedRequest),
+        _ => Results.Problem(outcome.ErrorMessage ?? "Order command failed")
+    };
 });
 
 app.MapGet("/api/orders", (ExchangeSimulator exchange) => Results.Ok(exchange.GetOrders()));
@@ -114,26 +125,30 @@ app.MapPost("/api/demo/reset", (ExchangeSimulator exchange) =>
     return Results.Ok(new { Reset = true });
 });
 
-app.MapDelete("/api/orders/{orderId:guid}", (ExchangeSimulator exchange, Guid orderId) =>
+app.MapDelete("/api/orders/{orderId:guid}", async (IOrderCommandQueue orderQueue, Guid orderId, CancellationToken ct) =>
 {
-    var result = exchange.CancelOrder(orderId);
-    if (result is null)
+    var outcome = await orderQueue.EnqueueAsync(new CancelOrderCommand(orderId), ct);
+    return outcome.Status switch
     {
-        return Results.NotFound();
-    }
-
-    return result.Order.Status == "Canceled" ? Results.Ok(result) : Results.Conflict(result);
+        OrderCommandOutcomeStatus.Completed when outcome.Result?.Order.Status == "Canceled" => Results.Ok(outcome.Result),
+        OrderCommandOutcomeStatus.Completed => Results.Conflict(outcome.Result),
+        OrderCommandOutcomeStatus.NotFound => Results.NotFound(),
+        OrderCommandOutcomeStatus.Canceled => Results.StatusCode(StatusCodes.Status499ClientClosedRequest),
+        _ => Results.Problem(outcome.ErrorMessage ?? "Cancel command failed")
+    };
 });
 
-app.MapPut("/api/orders/{orderId:guid}", async (ExchangeSimulator exchange, Guid orderId, ModifyOrderRequest request, CancellationToken ct) =>
+app.MapPut("/api/orders/{orderId:guid}", async (IOrderCommandQueue orderQueue, Guid orderId, ModifyOrderRequest request, CancellationToken ct) =>
 {
-    var result = await exchange.ModifyOrderAsync(orderId, request, ct);
-    if (result is null)
+    var outcome = await orderQueue.EnqueueAsync(new ModifyOrderCommand(orderId, request), ct);
+    return outcome.Status switch
     {
-        return Results.NotFound();
-    }
-
-    return result.ExecutionReports.Any(r => r.Status == "ModifyRejected") ? Results.Conflict(result) : Results.Ok(result);
+        OrderCommandOutcomeStatus.Completed when outcome.Result?.ExecutionReports.Any(r => r.Status == "ModifyRejected") == true => Results.Conflict(outcome.Result),
+        OrderCommandOutcomeStatus.Completed => Results.Ok(outcome.Result),
+        OrderCommandOutcomeStatus.NotFound => Results.NotFound(),
+        OrderCommandOutcomeStatus.Canceled => Results.StatusCode(StatusCodes.Status499ClientClosedRequest),
+        _ => Results.Problem(outcome.ErrorMessage ?? "Modify command failed")
+    };
 });
 
 app.MapGet("/api/executions", (ExchangeSimulator exchange) => Results.Ok(exchange.GetExecutions()));

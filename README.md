@@ -21,6 +21,7 @@ Run locally with dotnet run from src/TradeDemo.Api and open https://localhost:50
 │  │                          │ (batch consume)     │      │  │
 │  │                          └─────────┬───────────┘      │  │
 │  │                                    │ SignalR           │  │
+│  │  HTTP Order API ─▶ OrderCommandQueue ─▶ Processor ─▶ Exchange/Risk/Position │
 │  │  ┌────────────────────────────────▼──────────────┐   │  │
 │  │  │ Static Files (Trading Terminal UI)             │   │  │
 │  │  │ - Fast-scroll signal feed                      │   │  │
@@ -90,6 +91,7 @@ Or run with explicit settings:
 | **Order flow heatmap** | Buy vs sell volume ratio per symbol |
 | **Ticker tape** | Continuous horizontal scroll of latest prices |
 | **Queue simulation** | Bounded Channel (10K) with backpressure + drop-oldest semantics |
+| **Order command queue** | HTTP order commands serialize through a bounded FIFO Channel before exchange/risk/position processing |
 | **Throughput stats** | Real-time msg/sec, queue depth, processed/dropped counters |
 | **High-frequency generation** | 5-20 events per 20-80ms tick (~200-500 events/sec) |
 | **Lock-free latency metrics** | p50/p95/p99 percentiles via Interlocked CAS + ArrayPool |
@@ -114,7 +116,8 @@ The deployed site has multiple pages, each targeting a specific engineering conc
 |----------|--------|-------------|
 | `/api/metrics` | GET | Current performance snapshot (latencies, GC, allocations) |
 | `/api/metrics/stream` | GET | Server-Sent Events stream of metrics (1/sec) |
-| `/api/queue/stats` | GET | Queue depth, processed count, dropped count |
+| `/api/queue/stats` | GET | Market-data queue depth, processed count, dropped count |
+| `/api/orders/queue/stats` | GET | Order command queue depth, processed count, failures, queue wait, processing time |
 | `/api/replay/scenarios` | GET | Available replay scenarios |
 | `/api/replay/start/{id}` | POST | Start a replay scenario |
 | `/api/replay/stop` | POST | Stop current replay |

@@ -26,7 +26,7 @@
         <div class="section">
             <h2 class="section-title">Data Flow Pipeline</h2>
             <div class="section-body">
-                <p>The system models a complete market data distribution pipeline — from simulated exchange feeds through queue-based ingestion to real-time client broadcast. Each stage is designed for <strong>maximum throughput with controlled backpressure</strong>.</p>
+                <p>The system models a complete trading pipeline — simulated exchange feeds use queue-based ingestion for real-time client broadcast, while HTTP order commands flow through a bounded FIFO command queue before risk/exchange/position processing. Each stage is designed for <strong>maximum throughput with controlled backpressure</strong>.</p>
             </div>
             <div class="flowchart">
 ┌─────────────────────────────────┐
@@ -61,6 +61,28 @@
 │   Trading Terminal UI           │  60-row signal feed (bounded DOM)
 │   (Browser Clients)             │  Virtual ticker tape
 │                                 │  Order flow aggregation
+└─────────────────────────────────┘
+
+┌─────────────────────────────────┐
+│   HTTP Order API                │  POST/PUT/DELETE /api/orders
+└──────────────┬──────────────────┘
+               │ WriteAsync (wait for capacity)
+               ▼
+┌─────────────────────────────────┐
+│   Bounded Channel&lt;OrderCommand&gt; │  Capacity: 4,096
+│   (FIFO Backpressure Queue)     │  FullMode: Wait
+│                                 │  SingleReader: true
+└──────────────┬──────────────────┘
+               │ ReadAllAsync
+               ▼
+┌─────────────────────────────────┐
+│   OrderCommandProcessor         │  Serializes submit/cancel/modify
+│   (Gateway Command Loop)        │  Queue wait + processing stats
+└──────────────┬──────────────────┘
+               ▼
+┌─────────────────────────────────┐
+│   ExchangeSimulator             │  RiskEngine → fills → positions
+│   RiskEngine / PositionManager  │  Existing API response shapes
 └─────────────────────────────────┘</div>
         </div>
 
@@ -101,6 +123,11 @@
                             <td><strong>Interlocked counters</strong></td>
                             <td>Lock-free stats on the hot path; no mutex contention</td>
                             <td>Critical when processing >10K msgs/sec</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Order command queue</strong></td>
+                            <td>HTTP order mutations enter a bounded FIFO Channel and are processed by one hosted command loop</td>
+                            <td>Mirrors order gateway sequencing while preserving deterministic demo state transitions</td>
                         </tr>
                         <tr>
                             <td><strong>ArrayPool for metrics</strong></td>
