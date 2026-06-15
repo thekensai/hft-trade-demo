@@ -23,6 +23,24 @@
         .profile-name { font-size: 13px; font-weight: 600; margin-bottom: 8px; color: var(--text-primary); }
         .profile-chart { height: 60px; display: flex; align-items: flex-end; gap: 1px; }
         .profile-chart-bar { flex: 1; background: var(--cyan); opacity: 0.7; border-radius: 1px 1px 0 0; transition: height 0.2s; }
+        .scenario-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
+        .scenario-tab { font-family: var(--font-mono); font-size: 11px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-panel); color: var(--text-secondary); cursor: pointer; letter-spacing: 0.5px; }
+        .scenario-tab:hover { border-color: var(--cyan); color: var(--text-primary); }
+        .scenario-tab.active { border-color: var(--cyan); color: var(--cyan); background: rgba(6, 182, 212, 0.1); }
+        .scenario-panel { display: none; }
+        .scenario-panel.active { display: block; }
+        .scenario-tab-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 0.9fr); gap: 16px; align-items: stretch; }
+        .scenario-tab-layout.no-profile { grid-template-columns: minmax(0, 1fr); }
+        .scenario-actions { margin-top: 16px; }
+        .disconnect-log { margin-top: 16px; padding: 14px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; }
+        .disconnect-log-title { color: var(--text-primary); font-size: 12px; font-weight: 700; margin-bottom: 10px; }
+        .disconnect-log-row { display: grid; grid-template-columns: 76px 1fr; gap: 10px; padding: 4px 0; color: var(--text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
+        .disconnect-log-row.active { color: var(--cyan); }
+        .disconnect-log-row.warning { color: var(--yellow); }
+        .disconnect-log-row.recovered { color: var(--green); }
+        .disconnect-log-time { color: var(--text-muted); }
+        .disconnect-log-empty { color: var(--text-muted); font-size: 12px; }
+        @media (max-width: 800px) { .scenario-tab-layout { grid-template-columns: 1fr; } }
     </style>
 </head>
 <body>
@@ -58,57 +76,14 @@
             </div>
         </div>
 
-        <!-- ── Why Replay Matters ── -->
+        <!-- ── Scenario Tabs ── -->
         <div class="section">
-            <h2 class="section-title">Why Replay Engines Matter in Trading</h2>
+            <h2 class="section-title">Replay Scenarios</h2>
             <div class="section-body">
-                <p>Every production trading system needs a replay capability. Engineers use replay to:</p>
-                <ul class="feature-list">
-                    <li><strong>Validate behavior under load:</strong> "What happens to our gateway when NASDAQ opens and sends 50K msgs/sec?"</li>
-                    <li><strong>Test failure modes:</strong> "How does the system behave when CME disconnects for 5 seconds mid-feed?"</li>
-                    <li><strong>Measure queue saturation:</strong> "At what rate do we start dropping messages? Is our backpressure tuned correctly?"</li>
-                    <li><strong>Benchmark changes:</strong> "Did this optimization actually reduce p99 latency under burst traffic?"</li>
-                    <li><strong>Reproduce production incidents:</strong> Deterministic replay of recorded feeds lets engineers reproduce exact failure conditions.</li>
-                </ul>
+                <p>Each tab pairs one replay scenario with the traffic profile it generates.</p>
             </div>
-        </div>
-
-        <!-- ── Traffic Profiles ── -->
-        <div class="section">
-            <h2 class="section-title">Traffic Profiles</h2>
-            <div class="section-body">
-                <p>Each scenario uses a different traffic shape. These model real market conditions:</p>
-            </div>
-
-            <div class="profile-demo">
-                <div class="profile-name">Constant — Steady State</div>
-                <div class="section-body" style="font-size:12px;margin-bottom:8px">Uniform rate throughout. Models a normal trading session (no events, no news).</div>
-                <div class="profile-chart" id="chartConstant"></div>
-            </div>
-
-            <div class="profile-demo">
-                <div class="profile-name">Burst — Periodic Spikes</div>
-                <div class="section-body" style="font-size:12px;margin-bottom:8px">Low baseline with periodic 10x spikes. Models options expiry, earnings releases, or batch auction results.</div>
-                <div class="profile-chart" id="chartBurst"></div>
-            </div>
-
-            <div class="profile-demo">
-                <div class="profile-name">Flash Crash — Calm → Explosion → Aftermath</div>
-                <div class="section-body" style="font-size:12px;margin-bottom:8px">20% baseline → 500% spike → gradual decay. Models 2010 Flash Crash or circuit-breaker events.</div>
-                <div class="profile-chart" id="chartFlashCrash"></div>
-            </div>
-
-            <div class="profile-demo">
-                <div class="profile-name">Ramp — Linear Saturation Test</div>
-                <div class="section-body" style="font-size:12px;margin-bottom:8px">Linear ramp from 0 to max rate. Finds the exact saturation point of the queue processor.</div>
-                <div class="profile-chart" id="chartRamp"></div>
-            </div>
-        </div>
-
-        <!-- ── Scenarios ── -->
-        <div class="section">
-            <h2 class="section-title">Available Scenarios</h2>
-            <div class="scenario-grid" id="scenarioGrid">
+            <div class="scenario-tabs" id="scenarioTabs"></div>
+            <div id="scenarioPanels">
                 <div class="scenario-card" style="opacity:0.5">
                     <div class="scenario-name">Loading...</div>
                 </div>
@@ -142,47 +117,47 @@
             </div>
         </div>
 
-        <!-- ── Implementation Details ── -->
-        <div class="section">
-            <h2 class="section-title">Implementation</h2>
-            <span class="code-label">REPLAY ENGINE — RATE-CONTROLLED EVENT INJECTION</span>
-            <div class="code-block"><span class="keyword">private async</span> <span class="type">Task</span> RunScenarioAsync(<span class="type">ReplayScenario</span> scenario, <span class="type">CancellationToken</span> ct)
-{
-    <span class="keyword">while</span> (!ct.IsCancellationRequested &amp;&amp; elapsed &lt; duration)
-    {
-        <span class="comment">// Calculate rate based on traffic profile curve</span>
-        <span class="keyword">var</span> effectiveRate = CalculateEffectiveRate(scenario, elapsed);
-        
-        <span class="comment">// Simulate exchange disconnect window</span>
-        <span class="keyword">if</span> (scenario.SimulateDisconnect &amp;&amp; IsInDisconnectWindow(elapsed))
-        {
-            <span class="comment">// Feed pauses — queue drains, UI shows disconnect</span>
-            <span class="keyword">await</span> <span class="type">Task</span>.Delay(<span class="number">100</span>, ct);
-            <span class="keyword">continue</span>;
-        }
-        
-        <span class="comment">// Generate batch sized for target rate</span>
-        <span class="keyword">var</span> batchSize = (<span class="keyword">int</span>)(effectiveRate * batchInterval / <span class="number">1000.0</span>);
-        
-        <span class="keyword">for</span> (<span class="keyword">int</span> i = <span class="number">0</span>; i &lt; batchSize; i++)
-        {
-            <span class="comment">// Enqueue with latency measurement</span>
-            <span class="keyword">var</span> sw = <span class="type">Stopwatch</span>.StartNew();
-            _queueProcessor.EnqueueAsync(signal);
-            _metrics.RecordLatency(sw.ElapsedTicks);
-        }
-        
-        <span class="keyword">await</span> <span class="type">Task</span>.Delay(batchInterval, ct);
-    }
-}</div>
-        </div>
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
     <script>
+        const profileNames = ['Constant', 'Ramp', 'Burst', 'FlashCrash'];
+        let disconnectLogScenario = null;
+        let disconnectLogPhase = 'idle';
+
+        const profileDetails = {
+            Constant: {
+                title: 'Constant — Steady State',
+                description: 'Uniform rate throughout. Models a normal trading session with no major news or volatility shock.',
+                fn: () => 0.5
+            },
+            Burst: {
+                title: 'Burst — Periodic Spikes',
+                description: 'Low baseline with periodic 10x spikes. Models options expiry, earnings releases, or batch auction results.',
+                fn: (p) => Math.sin(p * Math.PI * 8) > 0.7 ? 1 : 0.1
+            },
+            FlashCrash: {
+                title: 'Flash Crash — Calm → Explosion → Aftermath',
+                description: '20% baseline → 500% spike → gradual decay. Models circuit-breaker events and disorderly liquidity withdrawal.',
+                fn: (p) => {
+                    if (p < 0.3) return 0.2;
+                    if (p < 0.5) return 0.6;
+                    if (p < 0.6) return 1.0;
+                    if (p < 0.7) return 0.4;
+                    return 0.15;
+                }
+            },
+            Ramp: {
+                title: 'Ramp — Linear Saturation Test',
+                description: 'Linear ramp from 0 to max rate. Finds the exact saturation point of the queue processor.',
+                fn: (p) => p
+            }
+        };
+
         // ── Traffic Profile Visualizations ──
         function renderProfileChart(id, fn) {
             const el = document.getElementById(id);
+            if (!el) return;
             const bars = 40;
             let html = '';
             for (let i = 0; i < bars; i++) {
@@ -193,40 +168,76 @@
             el.innerHTML = html;
         }
 
-        renderProfileChart('chartConstant', () => 0.5);
-        renderProfileChart('chartBurst', (p) => Math.sin(p * Math.PI * 8) > 0.7 ? 1 : 0.1);
-        renderProfileChart('chartFlashCrash', (p) => {
-            if (p < 0.3) return 0.2;
-            if (p < 0.5) return 0.6;
-            if (p < 0.6) return 1.0;
-            if (p < 0.7) return 0.4;
-            return 0.15;
-        });
-        renderProfileChart('chartRamp', (p) => p);
-
         // ── Load Scenarios ──
         async function loadScenarios() {
             const res = await fetch('/api/replay/scenarios');
             const scenarios = await res.json();
-            const grid = document.getElementById('scenarioGrid');
-            grid.innerHTML = scenarios.map((s, i) => `
-                <div class="scenario-card" onclick="startScenario(${i})" id="scenario-${i}">
-                    <div class="scenario-name">${s.name}</div>
-                    <div class="scenario-desc">${s.description}</div>
-                    <div class="scenario-meta">
-                        <span>⚡ ${s.targetMessagesPerSecond.toLocaleString()} msg/s</span>
-                        <span>⏱ ${s.durationSeconds}s</span>
-                        <span>📈 ${s.profile}</span>
-                        ${s.simulateDisconnect ? '<span>🔌 Disconnect</span>' : ''}
-                    </div>
-                </div>
+            const tabs = document.getElementById('scenarioTabs');
+            const panels = document.getElementById('scenarioPanels');
+
+            tabs.innerHTML = scenarios.map((s, i) => `
+                <button class="scenario-tab ${i === 0 ? 'active' : ''}" type="button" onclick="selectScenarioTab(${i})" id="scenario-tab-${i}">${s.name}</button>
             `).join('');
+
+            panels.innerHTML = scenarios.map((s, i) => scenarioPanel(s, i)).join('');
             window._scenarios = scenarios;
+            scenarios.forEach((s, i) => renderProfileChart(`chart-${i}`, profileFn(s.profile)));
+        }
+
+        function scenarioPanel(s, i) {
+            const profileKey = profileName(s.profile);
+            const profile = profileDetails[profileKey] ?? profileDetails.Constant;
+            const hasProfile = !s.simulateDisconnect;
+            return `<div class="scenario-panel ${i === 0 ? 'active' : ''}" id="scenario-panel-${i}">
+                <div class="scenario-tab-layout ${hasProfile ? '' : 'no-profile'}">
+                    <div class="scenario-card" id="scenario-${i}">
+                        <div class="scenario-name">${s.name}</div>
+                        <div class="scenario-desc">${s.description}</div>
+                        <div class="scenario-meta">
+                            <span>⚡ ${s.targetMessagesPerSecond.toLocaleString()} msg/s</span>
+                            <span>⏱ ${s.durationSeconds}s</span>
+                            <span>📈 ${profileKey}</span>
+                            ${s.simulateDisconnect ? '<span>🔌 Disconnect</span>' : ''}
+                        </div>
+                        <div class="scenario-actions">
+                            <button class="btn" type="button" onclick="startScenario(${i})">START SCENARIO</button>
+                        </div>
+                        ${s.simulateDisconnect ? disconnectLogHtml(i) : ''}
+                    </div>
+                    ${hasProfile ? `<div class="profile-demo">
+                        <div class="profile-name">${profile.title}</div>
+                        <div class="section-body" style="font-size:12px;margin-bottom:8px">${profile.description}</div>
+                        <div class="profile-chart" id="chart-${i}"></div>
+                    </div>` : ''}
+                </div>
+            </div>`;
+        }
+
+        function disconnectLogHtml(i) {
+            return `<div class="disconnect-log" id="disconnect-log-${i}">
+                <div class="disconnect-log-title">Exchange Disconnect scenario:</div>
+                <div class="disconnect-log-empty">Waiting for disconnect window...</div>
+            </div>`;
+        }
+
+        function selectScenarioTab(idx) {
+            document.querySelectorAll('.scenario-tab').forEach((tab, i) => tab.classList.toggle('active', i === idx));
+            document.querySelectorAll('.scenario-panel').forEach((panel, i) => panel.classList.toggle('active', i === idx));
+        }
+
+        function profileName(profile) {
+            if (typeof profile === 'number') return profileNames[profile] ?? 'Constant';
+            return String(profile ?? 'Constant');
+        }
+
+        function profileFn(profile) {
+            return (profileDetails[profileName(profile)] ?? profileDetails.Constant).fn;
         }
 
         // ── Start/Stop ──
         async function startScenario(idx) {
             const scenario = window._scenarios[idx];
+            if (scenario?.simulateDisconnect) resetDisconnectLog(idx);
             const res = await fetch('/api/replay/start', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -238,6 +249,61 @@
 
         async function stopReplay() {
             await fetch('/api/replay/stop', { method: 'POST' });
+        }
+
+        function resetDisconnectLog(idx) {
+            disconnectLogScenario = window._scenarios?.[idx]?.name ?? null;
+            disconnectLogPhase = 'idle';
+            const log = document.getElementById(`disconnect-log-${idx}`);
+            if (log) {
+                log.innerHTML = `<div class="disconnect-log-title">Exchange Disconnect scenario:</div>
+                    <div class="disconnect-log-empty">Waiting for disconnect window...</div>`;
+            }
+        }
+
+        function updateDisconnectLog(state) {
+            const idx = window._scenarios?.findIndex(s => s.name === state.scenarioName && s.simulateDisconnect) ?? -1;
+            if (idx < 0) return;
+            if (disconnectLogScenario !== state.scenarioName) resetDisconnectLog(idx);
+
+            const scenario = window._scenarios[idx];
+            const progress = scenario?.durationSeconds > 0 ? Number(state.elapsedSeconds ?? 0) / scenario.durationSeconds : 0;
+            const hasDisconnected = state.isDisconnected || progress >= 0.40;
+            const hasRestored = progress >= 0.45;
+
+            if (hasDisconnected && disconnectLogPhase === 'idle') {
+                markDisconnectStep(idx, 'disconnect', 'warning');
+                markDisconnectStep(idx, 'safe', 'warning');
+                markDisconnectStep(idx, 'orders', 'warning');
+                disconnectLogPhase = 'disconnected';
+            }
+
+            if (hasRestored && disconnectLogPhase === 'disconnected') {
+                markDisconnectStep(idx, 'feed', 'active');
+                setTimeout(() => markDisconnectStep(idx, 'recovery', 'recovered'), 1000);
+                disconnectLogPhase = 'recovered';
+            }
+        }
+
+        function markDisconnectStep(idx, step, statusClass) {
+            const log = document.getElementById(`disconnect-log-${idx}`);
+            if (!log || log.querySelector(`[data-disconnect-step="${step}"]`)) return;
+            log.querySelector('.disconnect-log-empty')?.remove();
+            const row = document.createElement('div');
+            row.className = `disconnect-log-row ${statusClass}`;
+            row.dataset.disconnectStep = step;
+            row.innerHTML = `<span class="disconnect-log-time">${new Date().toISOString().substring(11, 19)}</span><span>${disconnectStepMessage(step)}</span>`;
+            log.appendChild(row);
+        }
+
+        function disconnectStepMessage(step) {
+            return {
+                disconnect: 'Exchange disconnected',
+                safe: 'OMS entered Safe Mode',
+                orders: 'Orders suspended',
+                feed: 'Feed restored',
+                recovery: 'Recovery complete'
+            }[step] ?? step;
         }
 
         // ── SignalR for live state updates ──
@@ -273,6 +339,7 @@
                 if (scenario) {
                     progressFill.style.width = `${(state.elapsedSeconds / scenario.durationSeconds * 100).toFixed(1)}%`;
                 }
+                updateDisconnectLog(state);
             } else {
                 statusEl.className = 'replay-status';
                 stateEl.textContent = '● IDLE';

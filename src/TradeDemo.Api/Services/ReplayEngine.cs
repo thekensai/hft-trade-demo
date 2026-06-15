@@ -27,6 +27,7 @@ public class ReplayEngine
     private readonly IHubContext<TradeHub> _hubContext;
     private readonly ILogger<ReplayEngine> _logger;
     private CancellationTokenSource? _replayCts;
+    private long _replayVersion;
     private static readonly Random _rng = new();
 
     public ReplayState CurrentState { get; private set; } = new();
@@ -73,6 +74,7 @@ public class ReplayEngine
         await StopAsync();
 
         _replayCts = new CancellationTokenSource();
+        var version = Interlocked.Increment(ref _replayVersion);
         CurrentState = new ReplayState
         {
             IsRunning = true,
@@ -81,13 +83,14 @@ public class ReplayEngine
             StartedAt = DateTime.UtcNow
         };
 
-        _ = Task.Run(() => RunScenarioAsync(scenario, _replayCts.Token));
+        _ = Task.Run(() => RunScenarioAsync(scenario, version, _replayCts.Token));
 
         await _hubContext.Clients.All.SendAsync("ReplayStateChanged", CurrentState);
     }
 
     public async Task StopAsync()
     {
+        Interlocked.Increment(ref _replayVersion);
         if (_replayCts != null)
         {
             await _replayCts.CancelAsync();
@@ -200,7 +203,7 @@ public class ReplayEngine
         }
     }
 
-    private async Task RunScenarioAsync(ReplayScenario scenario, CancellationToken ct)
+    private async Task RunScenarioAsync(ReplayScenario scenario, long version, CancellationToken ct)
     {
         _logger.LogInformation("Replay started: {Scenario} at {Rate} msgs/sec for {Duration}s",
             scenario.Name, scenario.TargetMessagesPerSecond, scenario.DurationSeconds);
@@ -298,8 +301,11 @@ public class ReplayEngine
         catch (OperationCanceledException) { }
         finally
         {
-            CurrentState = CurrentState with { IsRunning = false, MessagesSent = messagesSent };
-            await _hubContext.Clients.All.SendAsync("ReplayStateChanged", CurrentState);
+            if (Interlocked.Read(ref _replayVersion) == version)
+            {
+                CurrentState = CurrentState with { IsRunning = false, MessagesSent = messagesSent };
+                await _hubContext.Clients.All.SendAsync("ReplayStateChanged", CurrentState);
+            }
             _logger.LogInformation("Replay completed: {Messages} messages in {Elapsed:F1}s",
                 messagesSent, sw.Elapsed.TotalSeconds);
         }
