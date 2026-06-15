@@ -46,6 +46,9 @@ const state = {
     manualOrderQuantity: 100,
     orderSubmitInFlight: false,
     demoResetInFlight: false,
+    tradingPanelsRefreshInFlight: false,
+    pendingTradingPanelsRefresh: false,
+    systemMetricsInFlight: false,
     latestLatency: null,
     latestSlippage: null,
 };
@@ -865,7 +868,7 @@ async function submitOrder(order) {
         });
         if (!response.ok) throw new Error(`Order request failed: ${response.status}`);
         renderOrderResult(await response.json());
-        await refreshTradingPanels();
+        scheduleTradingPanelsRefresh();
     } catch (err) {
         console.error("Order submit failed:", err);
         addLifecycleMessage("Rejected", err.message || "Order submit failed");
@@ -888,14 +891,32 @@ function renderOrderResult(result) {
 }
 
 async function refreshTradingPanels() {
-    await Promise.all([
-        refreshDepth(),
-        refreshPositions(),
-        refreshTradeMonitor(),
-        refreshExecutionStats(),
-        refreshMarketMakerState(),
-        refreshLifecycle(),
-    ]);
+    if (state.tradingPanelsRefreshInFlight) {
+        state.pendingTradingPanelsRefresh = true;
+        return;
+    }
+
+    state.tradingPanelsRefreshInFlight = true;
+    try {
+        await Promise.all([
+            refreshDepth(),
+            refreshPositions(),
+            refreshTradeMonitor(),
+            refreshExecutionStats(),
+            refreshMarketMakerState(),
+            refreshLifecycle(),
+        ]);
+    } finally {
+        state.tradingPanelsRefreshInFlight = false;
+        if (state.pendingTradingPanelsRefresh) {
+            state.pendingTradingPanelsRefresh = false;
+            setTimeout(refreshTradingPanels, 0);
+        }
+    }
+}
+
+function scheduleTradingPanelsRefresh() {
+    setTimeout(refreshTradingPanels, 0);
 }
 
 async function refreshDepth() {
@@ -1300,6 +1321,11 @@ setInterval(refreshTradingPanels, 2000);
 
 // ── System Metrics ──
 const updateSystemMetrics = async () => {
+    if (state.systemMetricsInFlight) {
+        return;
+    }
+
+    state.systemMetricsInFlight = true;
     try {
         const response = await fetch("/api/system/metrics");
         const metrics = await response.json();
@@ -1321,9 +1347,14 @@ const updateSystemMetrics = async () => {
         dom.statThreadCount.textContent = metrics.threadCount;
     } catch (err) {
         console.warn("Failed to fetch system metrics:", err);
+    } finally {
+        state.systemMetricsInFlight = false;
     }
 };
 
-// Update system metrics every second
-setInterval(updateSystemMetrics, 1000);
-updateSystemMetrics(); // Initial update
+// Update system metrics after the previous request finishes so slow responses do not stack up.
+async function pollSystemMetrics() {
+    await updateSystemMetrics();
+    setTimeout(pollSystemMetrics, 1000);
+}
+pollSystemMetrics();
