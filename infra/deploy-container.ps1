@@ -11,6 +11,13 @@ if (-not $ImageTag) {
     $ImageTag = [DateTime]::UtcNow.ToString('yyyyMMddHHmmss')
 }
 
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$dockerfilePath = Join-Path $repoRoot 'Dockerfile'
+
+if (-not (Test-Path $dockerfilePath)) {
+    throw "Could not find Dockerfile at '$dockerfilePath'."
+}
+
 $appName = az deployment group show --resource-group $ResourceGroupName --name main --query properties.outputs.containerAppName.value -o tsv
 
 if (-not $appName) {
@@ -27,7 +34,7 @@ if (-not $RegistryName) {
     az acr create --resource-group $ResourceGroupName --name $RegistryName --sku Basic --admin-enabled true --only-show-errors | Out-Null
 }
 
-$indexPath = Join-Path $PSScriptRoot 'src\TradeDemo.Api\wwwroot\index.html'
+$indexPath = Join-Path $repoRoot 'src\TradeDemo.Api\wwwroot\index.html'
 $indexHtml = Get-Content $indexPath -Raw
 if ([string]::IsNullOrWhiteSpace($indexHtml)) {
     throw "Refusing to deploy: '$indexPath' is empty."
@@ -46,17 +53,8 @@ if (-not $loginServer -or -not $acrUser -or -not $acrPass) {
     throw "Could not resolve Azure Container Registry credentials for '$RegistryName'."
 }
 
-Write-Host "Publishing container image to '$imageRef'..."
-$env:DOTNET_CONTAINER_REGISTRY_UNAME = $acrUser
-$env:DOTNET_CONTAINER_REGISTRY_PWORD = $acrPass
-
-try {
-    dotnet publish .\src\TradeDemo.Api\TradeDemo.Api.csproj --os linux --arch x64 /t:PublishContainer -p:ContainerRegistry=$loginServer -p:ContainerRepository=$ImageRepository -p:ContainerImageTags=$ImageTag
-}
-finally {
-    Remove-Item Env:DOTNET_CONTAINER_REGISTRY_UNAME -ErrorAction SilentlyContinue
-    Remove-Item Env:DOTNET_CONTAINER_REGISTRY_PWORD -ErrorAction SilentlyContinue
-}
+Write-Host "Building Dockerfile in Azure Container Registry and pushing image to '$imageRef'..."
+az acr build --registry $RegistryName --image "$ImageRepository`:$ImageTag" --file $dockerfilePath $repoRoot --only-show-errors | Out-Null
 
 Write-Host "Configuring registry credentials on Container App '$appName'..."
 az containerapp registry set --name $appName --resource-group $ResourceGroupName --server $loginServer --username $acrUser --password $acrPass --only-show-errors | Out-Null

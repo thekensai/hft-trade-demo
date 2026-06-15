@@ -58,5 +58,10 @@ if ($Bind) {
     Write-Output 'Hostname binding complete.'
 }
 else {
-    Write-Output "When DNS is ready, run: .\bind-custom-domain.ps1 -Hostname $Hostname -ResourceGroupName $ResourceGroupName$($ApexDomain ? ' -ApexDomain' : '') -Bind"
+    $apexDomainArg = ''
+    if ($ApexDomain) {
+        $apexDomainArg = ' -ApexDomain'
+    }
+
+    Write-Output "When DNS is ready, run: .\bind-custom-domain.ps1 -Hostname $Hostname -ResourceGroupName $ResourceGroupName$apexDomainArg -Bind"
 }
