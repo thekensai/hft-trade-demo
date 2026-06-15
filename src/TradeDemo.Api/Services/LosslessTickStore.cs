@@ -14,7 +14,7 @@ namespace TradeDemo.Api.Services;
 /// gap accounting. In production this role would be backed by Event Hubs/Kafka and
 /// durable storage; this class is the local demo equivalent.
 /// </summary>
-public sealed class LosslessTickStore : BackgroundService
+public sealed class LosslessTickStore : BackgroundService, IMarketDataSubscriber
 {
     private const int ChannelCapacity = 1_000_000;
     private const int RecentTickCapacity = 500_000;
@@ -45,6 +45,8 @@ public sealed class LosslessTickStore : BackgroundService
             SingleWriter = false
         });
     }
+
+    public void OnMarketData(TradeSignal signal) => TryAppend(signal);
 
     public bool TryAppend(TradeSignal signal)
     {

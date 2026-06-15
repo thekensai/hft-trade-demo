@@ -26,7 +26,7 @@ namespace TradeDemo.Api.Services;
 ///   Consumer thread  → drain-then-snapshot loop on a fixed cadence
 ///   Stats broadcast  → periodic, piggybacks on consumer loop
 /// </summary>
-public class TradeQueueProcessor : BackgroundService
+public class TradeQueueProcessor : BackgroundService, IMarketDataSubscriber
 {
     private const int ChannelCapacity = 100_000;
     private const int BroadcastIntervalMs = 33;         // ~30 snapshots/sec (monitor refresh rate)
@@ -75,6 +75,8 @@ public class TradeQueueProcessor : BackgroundService
     // Expose the channel writer for high-performance producers in the same assembly
     // (keeps the channel itself private while allowing TryWrite without reflection)
     internal ChannelWriter<TradeSignal> Writer => _channel.Writer;
+
+    public void OnMarketData(TradeSignal signal) => TryEnqueue(signal);
 
     /// <summary>
     /// Fast enqueue path for high-throughput producers. Call this instead of Writer.TryWrite()
