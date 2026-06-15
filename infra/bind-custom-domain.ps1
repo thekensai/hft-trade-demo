@@ -12,6 +12,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $true
 
 if (-not $ContainerAppName) {
     $ContainerAppName = az deployment group show --resource-group $ResourceGroupName --name main --query properties.outputs.containerAppName.value -o tsv
@@ -54,7 +55,10 @@ Write-Output 'Wait for DNS propagation before binding the hostname.'
 if ($Bind) {
     Write-Output ''
     Write-Output "Binding hostname '$Hostname' to Container App '$ContainerAppName'..."
-    az containerapp hostname bind --name $ContainerAppName --resource-group $ResourceGroupName --hostname $Hostname --only-show-errors | Out-Null
+    az containerapp hostname bind --name $ContainerAppName --resource-group $ResourceGroupName --hostname $Hostname --environment $appInfo.environmentId --only-show-errors | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Hostname binding failed."
+    }
     Write-Output 'Hostname binding complete.'
 }
 else {

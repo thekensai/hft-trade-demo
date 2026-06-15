@@ -56,32 +56,29 @@ Uses **Azure Container Apps** (consumption-based, no App Service VM quota needed
 ### 1. Bootstrap Azure prerequisites
 
 ```bash
-.\setup-azure.ps1
+.\infra\setup-azure.ps1
 ```
 
-### 2. Deploy Infrastructure
+### 2. Build, Deploy Infrastructure & Deploy Container
+
+Run this when infrastructure changes, or for the first deployment. The script builds the container image first, then passes that image into `infra/main.bicep` so the required `containerImage` parameter is always explicit.
 
 ```bash
-az deployment group create `
-  --resource-group rg-tradedemo `
-  --template-file infra/main.bicep `
-  --parameters infra/main.bicepparam
+.\infra\deploy-container.ps1 -DeployInfra
 ```
 
-### 3. Build & Deploy Container
+### 3. Deploy App-Only Changes
+
+For code/frontend-only changes after infrastructure already exists:
 
 ```bash
-.\deploy-container.ps1
+.\infra\deploy-container.ps1
 ```
 
 Or run with explicit settings:
 ```bash
-.\setup-azure.ps1 -ResourceGroupName rg-tradedemo -Location australiaeast
-az deployment group create `
-  --resource-group rg-tradedemo `
-  --template-file infra/main.bicep `
-  --parameters infra/main.bicepparam
-.\deploy-container.ps1 -ResourceGroupName rg-tradedemo
+.\infra\setup-azure.ps1 -ResourceGroupName rg-tradedemo -Location australiaeast
+.\infra\deploy-container.ps1 -ResourceGroupName rg-tradedemo -Location australiaeast -DeployInfra
 ```
 
 ## Features

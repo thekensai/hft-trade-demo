@@ -6,14 +6,27 @@ param baseName string = 'tradedemo'
 @description('Azure region')
 param location string = resourceGroup().location
 
-@description('Container image (set after first ACR push)')
-param containerImage string = 'mcr.microsoft.com/dotnet/samples:aspnetapp'
+@description('Stable suffix for resource names')
+param resourceSuffix string = take(uniqueString(subscription().subscriptionId, resourceGroup().id), 6)
 
-var suffix = take(uniqueString(subscription().subscriptionId, resourceGroup().id), 6)
-var logAnalyticsName = '${baseName}-logs-${suffix}'
-var containerEnvName = '${baseName}-env-${suffix}'
-var containerAppName = '${baseName}-app-${suffix}'
-var serviceBusNamespaceName = '${baseName}-bus-${suffix}'
+@description('Container image to deploy')
+param containerImage string
+
+@description('Container registry server for private images')
+param registryServer string = ''
+
+@description('Container registry username for private images')
+param registryUsername string = ''
+
+@secure()
+@description('Container registry password for private images')
+param registryPassword string = ''
+
+var useRegistryCredentials = !empty(registryServer) && !empty(registryUsername) && !empty(registryPassword)
+var logAnalyticsName = '${baseName}-logs-${resourceSuffix}'
+var containerEnvName = '${baseName}-env-${resourceSuffix}'
+var containerAppName = '${baseName}-app-${resourceSuffix}'
+var serviceBusNamespaceName = '${baseName}-bus-${resourceSuffix}'
 
 // ── Log Analytics (required for Container Apps) ──
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
@@ -48,14 +61,32 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
   location: location
   properties: {
     managedEnvironmentId: containerEnv.id
-    configuration: {
+    configuration: union({
+      activeRevisionsMode: 'Single'
       ingress: {
         external: true
         targetPort: 8080
         transport: 'auto'
         allowInsecure: false
+        stickySessions: {
+          affinity: 'sticky'
+        }
       }
-    }
+    }, useRegistryCredentials ? {
+      registries: [
+        {
+          server: registryServer
+          username: registryUsername
+          passwordSecretRef: 'acr-password'
+        }
+      ]
+      secrets: [
+        {
+          name: 'acr-password'
+          value: registryPassword
+        }
+      ]
+    } : {})
     template: {
       containers: [
         {

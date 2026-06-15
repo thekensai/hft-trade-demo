@@ -50,4 +50,4 @@ az group create --name $ResourceGroupName --location $Location --only-show-error
 
 Write-Host ''
 Write-Host 'Azure bootstrap complete.'
-Write-Host "Next: az deployment group create --resource-group $ResourceGroupName --template-file main.bicep --parameters main.bicepparam"
+Write-Host "Next: .\deploy-container.ps1 -ResourceGroupName $ResourceGroupName -DeployInfra"

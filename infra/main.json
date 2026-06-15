@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.43.8.12551",
-      "templateHash": "16213549861331644791"
+      "templateHash": "7392692704675050235"
     }
   },
   "parameters": {
@@ -23,20 +23,47 @@
         "description": "Azure region"
       }
     },
+    "resourceSuffix": {
+      "type": "string",
+      "defaultValue": "[take(uniqueString(subscription().subscriptionId, resourceGroup().id), 6)]",
+      "metadata": {
+        "description": "Stable suffix for resource names"
+      }
+    },
     "containerImage": {
       "type": "string",
-      "defaultValue": "mcr.microsoft.com/dotnet/samples:aspnetapp",
       "metadata": {
-        "description": "Container image (set after first ACR push)"
+        "description": "Container image to deploy"
+      }
+    },
+    "registryServer": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Container registry server for private images"
+      }
+    },
+    "registryUsername": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Container registry username for private images"
+      }
+    },
+    "registryPassword": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Container registry password for private images"
       }
     }
   },
   "variables": {
-    "suffix": "[take(uniqueString(subscription().subscriptionId, resourceGroup().id), 6)]",
-    "logAnalyticsName": "[format('{0}-logs-{1}', parameters('baseName'), variables('suffix'))]",
-    "containerEnvName": "[format('{0}-env-{1}', parameters('baseName'), variables('suffix'))]",
-    "containerAppName": "[format('{0}-app-{1}', parameters('baseName'), variables('suffix'))]",
-    "serviceBusNamespaceName": "[format('{0}-bus-{1}', parameters('baseName'), variables('suffix'))]"
+    "useRegistryCredentials": "[and(and(not(empty(parameters('registryServer'))), not(empty(parameters('registryUsername')))), not(empty(parameters('registryPassword'))))]",
+    "logAnalyticsName": "[format('{0}-logs-{1}', parameters('baseName'), parameters('resourceSuffix'))]",
+    "containerEnvName": "[format('{0}-env-{1}', parameters('baseName'), parameters('resourceSuffix'))]",
+    "containerAppName": "[format('{0}-app-{1}', parameters('baseName'), parameters('resourceSuffix'))]",
+    "serviceBusNamespaceName": "[format('{0}-bus-{1}', parameters('baseName'), parameters('resourceSuffix'))]"
   },
   "resources": [
     {
@@ -76,14 +103,7 @@
       "location": "[parameters('location')]",
       "properties": {
         "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', variables('containerEnvName'))]",
-        "configuration": {
-          "ingress": {
-            "external": true,
-            "targetPort": 8080,
-            "transport": "auto",
-            "allowInsecure": false
-          }
-        },
+        "configuration": "[union(createObject('activeRevisionsMode', 'Single', 'ingress', createObject('external', true(), 'targetPort', 8080, 'transport', 'auto', 'allowInsecure', false(), 'stickySessions', createObject('affinity', 'sticky'))), if(variables('useRegistryCredentials'), createObject('registries', createArray(createObject('server', parameters('registryServer'), 'username', parameters('registryUsername'), 'passwordSecretRef', 'acr-password')), 'secrets', createArray(createObject('name', 'acr-password', 'value', parameters('registryPassword')))), createObject()))]",
         "template": {
           "containers": [
             {
