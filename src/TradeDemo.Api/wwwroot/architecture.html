@@ -5,263 +5,550 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Architecture — Trade Signal Terminal</title>
     <link rel="stylesheet" href="css/shared.css">
+    <style>
+        .section-body h3 {
+            margin: 22px 0 10px;
+            font-family: var(--font-mono);
+            font-size: 13px;
+            color: var(--text-primary);
+            letter-spacing: 0.4px;
+        }
+        .section-body code {
+            font-family: var(--font-mono);
+            color: var(--cyan);
+            background: rgba(6, 182, 212, 0.08);
+            border: 1px solid rgba(6, 182, 212, 0.15);
+            border-radius: 3px;
+            padding: 1px 4px;
+        }
+        .flowchart code,
+        .code-block code {
+            color: inherit;
+            background: transparent;
+            border: 0;
+            padding: 0;
+        }
+    </style>
 </head>
 <body>
     <nav class="site-nav">
         <a href="/" class="nav-logo">◈ TRADE TERMINAL</a>
         <a href="/" class="nav-link">Live Terminal</a>
-        <a href="/architecture.html" class="nav-link active">Architecture</a>
-        <a href="/performance.html" class="nav-link">Performance</a>
-        <a href="/concurrency.html" class="nav-link">Concurrency</a>
         <a href="/replay.html" class="nav-link">Replay Engine</a>
+        <a href="/performance.html" class="nav-link">Performance</a>
+        <a href="/architecture.html" class="nav-link active">Architecture</a>
+        <a href="/concurrency.html" class="nav-link">Concurrency</a>
         <span class="nav-spacer"></span>
         <span class="nav-badge">.NET 8 · SignalR · Channels&lt;T&gt;</span>
     </nav>
 
     <div class="page-content">
-        <h1 class="page-title">System Architecture</h1>
-        <p class="page-subtitle">High-throughput event processing pipeline for real-time market data distribution</p>
+        <h1 class="page-title">Trade Demo Architecture</h1>
+        <p class="page-subtitle">Current architecture generated from ARCHITECTURE.md: API host, browser terminal, WPF terminal, market-data fan-out, replay, and FIFO order command processing.</p>
 
-        <!-- ── System Flow ── -->
-        <div class="section">
-            <h2 class="section-title">Data Flow Pipeline</h2>
-            <div class="section-body">
-                <p>The system models a complete trading pipeline — simulated exchange feeds use queue-based ingestion for real-time client broadcast, while HTTP order commands flow through a bounded FIFO command queue before risk/exchange/position processing. Each stage is designed for <strong>maximum throughput with controlled backpressure</strong>.</p>
+            <div class="section">
+                <h2 class="section-title">System Overview</h2>
+                <div class="section-body">
+                <p>This repository implements a .NET 8 trading-infrastructure demo with three cooperating client/server pieces:</p>
+                <ul class="feature-list">
+                    <li><strong>ASP.NET Core API host</strong> — serves the static browser terminal, exposes REST APIs, hosts the SignalR hub, runs background market-data services, owns the in-memory exchange simulator, and optionally writes/reads a durable tick journal.</li>
+                    <li><strong>Browser trading terminal</strong> — static HTML/CSS/vanilla JavaScript under <code>src/TradeDemo.Api/wwwroot</code>, using SignalR for live market-data snapshots and REST for order, replay, depth, metrics, and position views.</li>
+                    <li><strong>WPF trading terminal</strong> — a .NET 8 Windows desktop client under <code>src/TradeDemo.Wpf</code>, using the same SignalR hub and REST API as the browser UI.</li>
+                </ul>
+                <p>The demo intentionally separates high-volume market data from order/execution commands:</p>
+                <ul class="feature-list">
+                    <li><strong>Market-data path</strong> — synthetic ticks are generated at very high rates, published through an in-process bus, stored in a recent replay ring plus optional journal, and coalesced into browser/desktop-friendly SignalR snapshots.</li>
+                    <li><strong>Order/execution path</strong> — REST order mutations are submitted into a bounded FIFO order-command queue, serialized by a hosted command loop, risk-checked, simulated against a stateful synthetic depth book, reflected into positions/PnL, and returned as API responses.</li>
+                </ul>
+                <p>The goal is not to implement a real exchange, production OMS, or full matching engine. The goal is to demonstrate realistic trading-system mechanics: high-throughput streaming, backpressure, coalescing, replay, order lifecycle, pre-trade risk, synthetic liquidity consumption, partial fills, inventory risk, and observable latency/queue metrics.</p>
+                <pre class="flowchart">Browser Terminal / WPF Terminal
+
+├── SignalR /tradehub
+│   ├── TradeSignals snapshots
+│   ├── Stats
+│   └── ReplayStateChanged
+│
+└── REST APIs
+    ├── market data, metrics, queue stats, and replay
+    ├── order submit/cancel/modify and order queue stats
+    ├── executions, lifecycle, trade monitor, and execution stats
+    ├── depth, positions, and market-maker state
+    └── demo reset
+
+ASP.NET Core API Host
+
+├── MarketDataSimulator
+│   └── InMemoryMarketDataBus
+│       ├── LosslessTickStore → recent ring buffer + optional journal
+│       └── TradeQueueProcessor → coalesced SignalR UI stream
+│
+├── ReplayEngine
+│   ├── scenario replay
+│   ├── recent tick replay
+│   └── journal replay
+│
+└── Order/Execution Simulation
+    ├── REST endpoints in Program.cs
+    └── OrderCommandQueue → OrderCommandProcessor
+        └── ExchangeOrderCommandExecutor
+            └── ExchangeSimulator
+                ├── RiskEngine
+                ├── stateful synthetic DOM
+                ├── order lifecycle + execution reports
+                ├── partial fills / open orders / cancel / modify
+                ├── market-maker inventory state
+                └── PositionManager → realized + unrealized PnL</pre>
             </div>
-            <div class="flowchart">
-┌─────────────────────────────────┐
-│   Market Feed Simulator         │  Produces 200–20K msgs/sec
-│   (Multiple Exchange Sources)   │  Random walk + configurable volatility
-└──────────────┬──────────────────┘
-               │ TryWrite (lock-free)
-               ▼
-┌─────────────────────────────────┐
-│   Bounded Channel&lt;TradeSignal&gt;  │  Capacity: 10,000
-│   (Backpressure Queue)          │  FullMode: DropOldest
-│                                 │  SingleReader: true
-│                                 │  SingleWriter: false
-└──────────────┬──────────────────┘
-               │ ReadAllAsync (IAsyncEnumerable)
-               ▼
-┌─────────────────────────────────┐
-│   Signal Processing Engine      │  Batch drain (up to 50 per cycle)
-│   (TradeQueueProcessor)         │  Latency measurement per batch
-│                                 │  Interlocked counters (lock-free)
-└──────────────┬──────────────────┘
-               │ SendAsync (SignalR)
-               ▼
-┌─────────────────────────────────┐
-│   Real-time Broadcast Hub       │  WebSocket transport
-│   (SignalR Hub)                  │  Per-symbol group subscriptions
-│                                 │  Binary MessagePack option
-└──────────────┬──────────────────┘
-               │
-               ▼
-┌─────────────────────────────────┐
-│   Trading Terminal UI           │  60-row signal feed (bounded DOM)
-│   (Browser Clients)             │  Virtual ticker tape
-│                                 │  Order flow aggregation
-└─────────────────────────────────┘
-
-┌─────────────────────────────────┐
-│   HTTP Order API                │  POST/PUT/DELETE /api/orders
-└──────────────┬──────────────────┘
-               │ WriteAsync (wait for capacity)
-               ▼
-┌─────────────────────────────────┐
-│   Bounded Channel&lt;OrderCommand&gt; │  Capacity: 4,096
-│   (FIFO Backpressure Queue)     │  FullMode: Wait
-│                                 │  SingleReader: true
-└──────────────┬──────────────────┘
-               │ ReadAllAsync
-               ▼
-┌─────────────────────────────────┐
-│   OrderCommandProcessor         │  Serializes submit/cancel/modify
-│   (Gateway Command Loop)        │  Queue wait + processing stats
-└──────────────┬──────────────────┘
-               ▼
-┌─────────────────────────────────┐
-│   ExchangeSimulator             │  RiskEngine → fills → positions
-│   RiskEngine / PositionManager  │  Existing API response shapes
-└─────────────────────────────────┘</div>
-        </div>
-
-        <!-- ── Design Decisions ── -->
-        <div class="section">
-            <h2 class="section-title">Key Design Decisions</h2>
-            <div class="section-body">
+            <div class="section">
+                <h2 class="section-title">Important Naming Boundaries</h2>
+                <div class="section-body">
+                <p>This project uses trading-system terminology, but the boundaries are deliberate:</p>
                 <table class="data-table">
-                    <thead>
-                        <tr>
-                            <th>DECISION</th>
-                            <th>RATIONALE</th>
-                            <th>TRADING RELEVANCE</th>
-                        </tr>
-                    </thead>
+                    <thead><tr><th>Term</th><th>Current implementation</th></tr></thead>
                     <tbody>
-                        <tr>
-                            <td><strong>Bounded Channel (10K)</strong></td>
-                            <td>Prevents unbounded memory growth; mirrors Service Bus queue semantics</td>
-                            <td>Exchange feeds can burst; must handle without OOM</td>
-                        </tr>
-                        <tr>
-                            <td><strong>DropOldest policy</strong></td>
-                            <td>Stale market data is worthless — always prefer newest quotes</td>
-                            <td>Unlike e-commerce where order matters, trading needs freshness</td>
-                        </tr>
-                        <tr>
-                            <td><strong>SingleReader=true</strong></td>
-                            <td>Enables internal optimizations; guarantees ordering within consumer</td>
-                            <td>Trade sequence order matters for audit trails</td>
-                        </tr>
-                        <tr>
-                            <td><strong>Batch drain (50)</strong></td>
-                            <td>Amortizes syscall and serialization overhead across messages</td>
-                            <td>Mirrors Service Bus PeekLock batch receive patterns</td>
-                        </tr>
-                        <tr>
-                            <td><strong>Interlocked counters</strong></td>
-                            <td>Lock-free stats on the hot path; no mutex contention</td>
-                            <td>Critical when processing >10K msgs/sec</td>
-                        </tr>
-                        <tr>
-                            <td><strong>Order command queue</strong></td>
-                            <td>HTTP order mutations enter a bounded FIFO Channel and are processed by one hosted command loop</td>
-                            <td>Mirrors order gateway sequencing while preserving deterministic demo state transitions</td>
-                        </tr>
-                        <tr>
-                            <td><strong>ArrayPool for metrics</strong></td>
-                            <td>Percentile computation without GC pressure</td>
-                            <td>GC pauses are unacceptable in latency-sensitive paths</td>
-                        </tr>
+                        <tr><td>Frontend</td><td>Static browser terminal plus WPF desktop terminal; no React/Angular SPA.</td></tr>
+                        <tr><td>SignalR</td><td>Used for live market-data snapshots, server stats, and replay state notifications; order submission remains REST.</td></tr>
+                        <tr><td>Market-data bus</td><td>In-process fan-out via <code>IMarketDataBus</code>/<code>IMarketDataSubscriber</code>, not Kafka/EventStore.</td></tr>
+                        <tr><td>Order gateway</td><td>Minimal API endpoints plus <code>OrderCommandQueue</code>; there is no separate deployable gateway service.</td></tr>
+                        <tr><td>Order command queue</td><td>In-process bounded <code>Channel&lt;QueuedOrderCommand&gt;</code> with <code>FullMode=Wait</code>, not Azure Service Bus.</td></tr>
+                        <tr><td>Exchange simulator</td><td>In-memory simulation of lifecycle, risk, synthetic DOM consumption, partial fills, resting demo limit orders, cancel, and modify.</td></tr>
+                        <tr><td>Matching engine</td><td>Not a real exchange-grade matching engine. The UI may label the demonstration as FIFO price-time, but there is no real multi-participant price-time-priority book or queue-position model.</td></tr>
+                        <tr><td>Event stream</td><td>Represented by SignalR messages, order lifecycle events, execution reports, and API responses; no standalone event bus.</td></tr>
+                        <tr><td>PnL service</td><td>PnL is derived inside <code>PositionManager</code>; there is no separate PnL microservice.</td></tr>
+                        <tr><td>Persistence</td><td>Tick journal is optional; orders/executions/positions are in-memory only.</td></tr>
                     </tbody>
                 </table>
             </div>
-        </div>
-
-        <!-- ── Latency Budget ── -->
-        <div class="section">
-            <h2 class="section-title">Latency Budget</h2>
-            <div class="section-body">
-                <p>End-to-end latency from event generation to client receipt, broken down by stage:</p>
-            </div>
-            <div class="metric-grid">
-                <div class="metric-card">
-                    <div class="metric-card-label">ENQUEUE</div>
-                    <div class="metric-card-value">&lt;1</div>
-                    <div class="metric-card-unit">microsecond (TryWrite)</div>
-                </div>
-                <div class="metric-card">
-                    <div class="metric-card-label">QUEUE WAIT</div>
-                    <div class="metric-card-value">~50</div>
-                    <div class="metric-card-unit">microseconds (avg)</div>
-                </div>
-                <div class="metric-card">
-                    <div class="metric-card-label">BATCH PROCESS</div>
-                    <div class="metric-card-value">100–500</div>
-                    <div class="metric-card-unit">microseconds per batch</div>
-                </div>
-                <div class="metric-card">
-                    <div class="metric-card-label">SIGNALR SEND</div>
-                    <div class="metric-card-value">1–5</div>
-                    <div class="metric-card-unit">milliseconds (network)</div>
-                </div>
-                <div class="metric-card">
-                    <div class="metric-card-label">CLIENT RENDER</div>
-                    <div class="metric-card-value">&lt;16</div>
-                    <div class="metric-card-unit">milliseconds (60fps target)</div>
-                </div>
-                <div class="metric-card">
-                    <div class="metric-card-label">E2E TARGET</div>
-                    <div class="metric-card-value">&lt;20</div>
-                    <div class="metric-card-unit">milliseconds total</div>
-                </div>
-            </div>
-        </div>
-
-        <!-- ── Scaling Approach ── -->
-        <div class="section">
-            <h2 class="section-title">Scaling Strategy</h2>
-            <div class="section-body">
-                <p>The architecture scales horizontally at each layer:</p>
+            <div class="section">
+                <h2 class="section-title">Market-Data Pipeline</h2>
+                <div class="section-body">
+                <h3>Producer: <code>MarketDataSimulator</code></h3>
+                <p><code>MarketDataSimulator</code> is a <code>BackgroundService</code> optimized for very high synthetic throughput. It continuously generates <code>TradeSignal</code> records across equities, crypto, and futures-style instruments using random-walk prices, burst intensity, preallocated symbol/exchange strings, batched timestamps, and monotonic sequence IDs.</p>
+                <p>Each generated signal is published once:</p>
+                <pre class="flowchart">MarketDataSimulator
+    ↓ IMarketDataBus.Publish(signal)
+InMemoryMarketDataBus
+    ├── LosslessTickStore.OnMarketData(signal)
+    └── TradeQueueProcessor.OnMarketData(signal)</pre>
+                <p>This split is important:</p>
                 <ul class="feature-list">
-                    <li><strong>Feed ingestion:</strong> Multiple simulator instances can write concurrently (SingleWriter=false). In production, each exchange connection is a separate producer thread.</li>
-                    <li><strong>Queue processing:</strong> Single consumer with batch drain achieves >20K msgs/sec. For higher throughput, partition by symbol hash across multiple Channel instances.</li>
-                    <li><strong>Broadcast:</strong> SignalR supports Azure SignalR Service backplane for horizontal scale-out across multiple app instances.</li>
-                    <li><strong>Client fanout:</strong> Per-symbol group subscriptions mean clients only receive data they need — reducing bandwidth proportionally.</li>
+                    <li>The <strong>authoritative/replay path</strong> accepts ticks into <code>LosslessTickStore</code> for sequence-aware recent replay and optional durable journal writes.</li>
+                    <li>The <strong>UI path</strong> accepts ticks into <code>TradeQueueProcessor</code> for latest-by-symbol coalescing and SignalR broadcast.</li>
+                </ul>
+                <h3>In-Process Fan-Out: <code>InMemoryMarketDataBus</code></h3>
+                <p><code>InMemoryMarketDataBus</code> is a small in-process pub/sub component. It is registered as <code>IMarketDataBus</code> and receives the fixed subscriber set from dependency injection:</p>
+                <pre class="flowchart">IMarketDataSubscriber[]
+├── LosslessTickStore
+└── TradeQueueProcessor</pre>
+                <p>Subscribers own their own channel and backpressure semantics, so the producer path does not need to know whether a consumer is replay-oriented or UI-oriented.</p>
+                <h3>UI Stream: <code>TradeQueueProcessor</code></h3>
+                <p><code>TradeQueueProcessor</code> is a <code>BackgroundService</code> and market-data subscriber. It owns a bounded <code>Channel&lt;TradeSignal&gt;</code> sized for bursty demo traffic:</p>
+                <table class="data-table">
+                    <thead><tr><th>Setting</th><th>Current value</th></tr></thead>
+                    <tbody>
+                        <tr><td>Channel capacity</td><td><code>100_000</code></td></tr>
+                        <tr><td>Full mode</td><td><code>DropOldest</code></td></tr>
+                        <tr><td>Single reader</td><td><code>true</code></td></tr>
+                        <tr><td>Single writer</td><td><code>false</code></td></tr>
+                        <tr><td>Broadcast cadence</td><td>about every <code>33ms</code></td></tr>
+                        <tr><td>Stats cadence</td><td>about every <code>500ms</code></td></tr>
+                    </tbody>
+                </table>
+                <p>The channel uses <code>DropOldest</code> because stale quotes are less useful than the newest quote in a real-time terminal.</p>
+                <pre class="flowchart">MarketDataSimulator
+    ↓ Publish
+InMemoryMarketDataBus
+    ↓ OnMarketData / TryEnqueue
+Bounded Channel&lt;TradeSignal&gt;
+    ↓ drain on timer tick
+Latest-by-symbol dictionary
+    ↓ SignalR SendAsync(&quot;TradeSignals&quot;, snapshot)
+Browser and WPF clients</pre>
+                <p>Key mechanics:</p>
+                <ul class="feature-list">
+                    <li>bounded channel backpressure with stale-tick discard</li>
+                    <li>single-reader drain loop</li>
+                    <li>multiple producer support</li>
+                    <li>latest-by-symbol coalescing</li>
+                    <li>snapshot broadcast near monitor refresh rates</li>
+                    <li><code>Stats</code> SignalR messages with processed/dropped/coalesced/broadcast metrics</li>
+                    <li>interlocked counters on the hot path</li>
+                    <li>latency and byte metrics recorded through <code>PerformanceMetrics</code></li>
+                </ul>
+                <p>The clients do <strong>not</strong> receive every raw tick. They receive compact snapshots that keep the UI responsive while the server continues processing high raw event rates.</p>
+                <h3>Lossless Recent Store + Optional Journal</h3>
+                <p><code>LosslessTickStore</code> is also a <code>BackgroundService</code> and market-data subscriber. It owns its own bounded channel and keeps a large recent replay window.</p>
+                <table class="data-table">
+                    <thead><tr><th>Setting</th><th>Current value</th></tr></thead>
+                    <tbody>
+                        <tr><td>Channel capacity</td><td><code>1_000_000</code></td></tr>
+                        <tr><td>Full mode</td><td><code>Wait</code> for async writes; <code>TryAppend</code> counts failures if immediate write cannot be accepted</td></tr>
+                        <tr><td>Recent tick capacity</td><td><code>500_000</code></td></tr>
+                        <tr><td>Journal batch size</td><td>configured by <code>TickJournal:BatchSize</code> (default <code>4096</code>)</td></tr>
+                        <tr><td>Journal flush interval</td><td>configured by <code>TickJournal:FlushIntervalMilliseconds</code> (default <code>250ms</code>)</td></tr>
+                    </tbody>
+                </table>
+                <p>It tracks accepted count, dropped count, sequence gaps, last sequence ID, queue depth, and recent-window size. The word “lossless” describes the intent of the authoritative path, but the current implementation can count drops if the in-memory channel cannot immediately accept a tick under extreme saturation.</p>
+                <p>Supported journal interfaces:</p>
+                <pre class="code-block">ITickJournalWriter
+ITickJournalReader
+ITickJournal</pre>
+                <p>Implemented providers:</p>
+                <ul class="feature-list">
+                    <li><code>NullTickJournal</code> when journaling is disabled or provider is <code>None</code></li>
+                    <li>local segment files</li>
+                    <li>Azure Blob-backed journal</li>
+                    <li>Azure Event Hubs-backed journal adapter</li>
+                </ul>
+                <p>The default <code>appsettings.json</code> has journaling disabled:</p>
+                <pre class="code-block">                    <span class="code-label">JSON</span>
+&quot;TickJournal&quot;: {
+  &quot;Enabled&quot;: false,
+  &quot;Provider&quot;: &quot;None&quot;
+}</pre>
+            </div>
+            <div class="section">
+                <h2 class="section-title">Replay Architecture</h2>
+                <div class="section-body">
+                <p><code>ReplayEngine</code> supports one replay at a time and reports state through both REST and SignalR <code>ReplayStateChanged</code> messages.</p>
+                <h3>1. Scenario Replay</h3>
+                <p>Synthetic traffic profiles demonstrate backpressure and UI behavior:</p>
+                <table class="data-table">
+                    <thead><tr><th>Scenario</th><th>Purpose</th></tr></thead>
+                    <tbody>
+                        <tr><td>Calm Market</td><td>Baseline steady-state behavior</td></tr>
+                        <tr><td>NASDAQ Burst</td><td>Burst traffic and queue pressure</td></tr>
+                        <tr><td>Flash Crash</td><td>Volatility spike and recovery behavior</td></tr>
+                        <tr><td>Ramp to Saturation</td><td>Increasing load and queue saturation</td></tr>
+                        <tr><td>Exchange Disconnect</td><td>Simulated feed pause/reconnect behavior</td></tr>
+                    </tbody>
+                </table>
+                <p>Scenario replay generates fresh synthetic ticks, appends them to <code>LosslessTickStore</code>, and enqueues them into the UI pipeline. Historical recent/journal replay uses the UI pipeline only to avoid duplicating already-stored ticks.</p>
+                <h3>2. Historical Tick Replay</h3>
+                <p>Replay can also read from:</p>
+                <ul class="feature-list">
+                    <li>recent in-memory tick log</li>
+                    <li>journal by sequence ID</li>
+                </ul>
+                <pre class="flowchart">POST /api/replay/recent?count=10000&amp;speed=1
+POST /api/replay/journal/from/{sequenceId}?count=10000&amp;speed=1</pre>
+                <p>Historical replay sends ticks back into <code>TradeQueueProcessor</code> only. It deliberately does not re-append replayed ticks into <code>LosslessTickStore</code>, because the authoritative store or journal already contains those events.</p>
+            </div>
+            <div class="section">
+                <h2 class="section-title">Order and Execution Simulation</h2>
+                <div class="section-body">
+                <p>The order path is REST-driven and separate from the SignalR market-data stream.</p>
+                <h3>Command Queue Flow</h3>
+                <p>Submit, cancel, and modify requests are serialized through <code>OrderCommandQueue</code>:</p>
+                <pre class="flowchart">Browser / WPF
+    ↓ POST /api/orders, DELETE /api/orders/{id}, PUT /api/orders/{id}
+Minimal API endpoint
+    ↓ EnqueueAsync(command)
+Bounded Channel&lt;QueuedOrderCommand&gt;
+    ↓ single reader
+OrderCommandProcessor BackgroundService
+    ↓ DispatchAsync
+ExchangeOrderCommandExecutor
+    ↓
+ExchangeSimulator</pre>
+                <p><code>OrderCommandQueue</code> uses a bounded <code>Channel&lt;QueuedOrderCommand&gt;</code> with:</p>
+                <table class="data-table">
+                    <thead><tr><th>Setting</th><th>Current value</th></tr></thead>
+                    <tbody>
+                        <tr><td>Capacity</td><td><code>4_096</code></td></tr>
+                        <tr><td>Full mode</td><td><code>Wait</code></td></tr>
+                        <tr><td>Single reader</td><td><code>true</code></td></tr>
+                        <tr><td>Single writer</td><td><code>false</code></td></tr>
+                    </tbody>
+                </table>
+                <p>Each API caller awaits the command completion task. The queue records enqueued/dequeued/processed counts, failed/canceled counts, average/max queue wait, average/max processing time, current depth, and timestamp. Stats are exposed at:</p>
+                <pre class="flowchart">GET /api/orders/queue/stats</pre>
+                <h3>Execution Flow</h3>
+                <p>The current logical execution flow is:</p>
+                <pre class="flowchart">OrderCommandProcessor
+    ↓
+ExchangeSimulator.SubmitOrderAsync
+    ↓ normalize order + snapshot pre-trade depth
+RiskEngine.Check
+    ↓
+simulated route / exchange / fill hops
+    ↓
+stateful synthetic depth consumption or resting limit order
+    ↓
+ExecutionReport(s) + OrderLifecycleEvent(s)
+    ↓
+PositionManager.ApplyFills
+    ↓
+OrderResult returned to API caller</pre>
+                <p>Cancel and modify commands are also serialized through the command queue. They update in-memory order state and execution/lifecycle collections when applicable.</p>
+                <h3>Order Lifecycle Events</h3>
+                <p>Each order returns timestamped lifecycle events, for example:</p>
+                <pre class="code-block">09:30:00.123 Submitted          Order Submitted BUY 100 ES @ Market
+09:30:00.126 Risk Check Passed  Risk Check Passed (0.8ms)
+09:30:00.131 Routed             Routed to CME (2.4ms)
+09:30:00.143 Accepted           Accepted (7.1ms)
+09:30:00.151 Fill               Filled 30 @ 5982.25
+09:30:00.156 Fill               Filled 45 @ 5982.50
+09:30:00.162 Fill               Filled 25 @ 5982.75
+09:30:00.163 Filled             Order Fully Filled (31.4ms)</pre>
+                <p>Lifecycle events are returned in <code>OrderResult</code> and can also be read via:</p>
+                <pre class="flowchart">GET /api/lifecycle/recent?count=80</pre>
+                <p>They are not currently pushed through SignalR as a separate order event bus.</p>
+                <h3>Synthetic Depth-of-Market</h3>
+                <p><code>ExchangeSimulator</code> owns a stateful synthetic depth book per symbol. ES and NQ use futures-like tick handling and a contract multiplier in PnL calculations; ES depth uses <code>0.25</code> tick size.</p>
+                <p>Example pre-trade book:</p>
+                <pre class="code-block">ASK 5982.75  25
+ASK 5982.50  45
+ASK 5982.25  30
+---- MID 5982.00 ----
+BID 5981.75  60
+BID 5981.50  40</pre>
+                <p>A <code>BUY 100 ES @ Market</code> consumes ask-side liquidity:</p>
+                <pre class="code-block">30 @ 5982.25
+45 @ 5982.50
+25 @ 5982.75</pre>
+                <p>Then consumed levels disappear and the book replenishes farther away. This demonstrates:</p>
+                <ul class="feature-list">
+                    <li>liquidity consumption</li>
+                    <li>partial fills</li>
+                    <li>slippage</li>
+                    <li>market impact</li>
+                    <li>average fill price</li>
+                    <li>order lifecycle reporting</li>
+                </ul>
+                <p>It is still not a real matching engine. There is no true external participant model, queue position, self-match prevention, persistence, or production-grade price-time priority.</p>
+                <h3>Resting Limit Orders, Cancel, and Modify</h3>
+                <p>Limit orders that cannot immediately cross the synthetic book can rest as <code>Working</code> orders in the in-memory order list. The API supports:</p>
+                <pre class="flowchart">GET    /api/orders/open
+DELETE /api/orders/{orderId}
+PUT    /api/orders/{orderId}</pre>
+                <p>Cancel and modify operations are routed through the same FIFO command queue, which keeps demo state transitions deterministic.</p>
+            </div>
+            <div class="section">
+                <h2 class="section-title">Risk Controls</h2>
+                <div class="section-body">
+                <p><code>RiskEngine</code> performs pre-trade checks before an order is routed/accepted:</p>
+                <table class="data-table">
+                    <thead><tr><th>Check</th><th>Behavior</th></tr></thead>
+                    <tbody>
+                        <tr><td>Quantity check</td><td>Rejects non-positive quantity</td></tr>
+                        <tr><td>Side check</td><td>Allows only <code>BUY</code> or <code>SELL</code></td></tr>
+                        <tr><td>Max order quantity</td><td>Rejects quantity above <code>1_000</code></td></tr>
+                        <tr><td>Max notional</td><td>Rejects notional above <code>10,000,000</code></td></tr>
+                        <tr><td>Fat-finger band</td><td>Rejects limit prices more than 5% away from reference price</td></tr>
+                        <tr><td>Position limit</td><td>Rejects orders that would breach absolute position of <code>1_000</code></td></tr>
+                        <tr><td>Demo venue throttle</td><td>Rare low-rate synthetic reject for small demo orders</td></tr>
+                    </tbody>
+                </table>
+                <p>Example rejects:</p>
+                <pre class="code-block">Rejected - Position Limit Exceeded (1,000)
+Rejected - Fat Finger Check - limit price outside 5% reference band
+Rejected - Risk Limit Breach - simulated venue throttle</pre>
+                <p>Rejected orders appear as rejected lifecycle/execution rows in the UI.</p>
+            </div>
+            <div class="section">
+                <h2 class="section-title">Position and PnL</h2>
+                <div class="section-body">
+                <p><code>PositionManager</code> applies fills incrementally and is protected by a lock around its position dictionary operations.</p>
+                <pre class="flowchart">Fill(s)
+    ↓
+PositionManager.ApplyFills / ApplyFill
+    ↓
+quantity + average price + realized PnL + mark price + unrealized PnL</pre>
+                <p>It tracks:</p>
+                <ul class="feature-list">
+                    <li>signed quantity</li>
+                    <li>average price</li>
+                    <li>mark price</li>
+                    <li>realized PnL</li>
+                    <li>derived unrealized PnL</li>
+                    <li>update time</li>
+                </ul>
+                <p>PnL is currently derived from in-memory position state. Futures-style symbols such as ES and NQ use a contract multiplier of <code>50</code>; other symbols use <code>1</code>. There is no separate PnL service and no fees/commissions model.</p>
+            </div>
+            <div class="section">
+                <h2 class="section-title">Market Maker Demo</h2>
+                <div class="section-body">
+                <p>The UI includes an optional market-maker demonstration. It is intentionally demo-oriented rather than a backend hosted strategy service.</p>
+                <p>The browser-side market-maker mode periodically:</p>
+                <ul class="feature-list">
+                    <li>fetches <code>/api/depth/ES</code></li>
+                    <li>fetches <code>/api/market-maker/state</code></li>
+                    <li>submits small bid/ask limit orders if inventory risk allows</li>
+                    <li>occasionally submits a tiny market order to demonstrate inventory/PnL movement</li>
+                </ul>
+                <p>Market-maker risk state is exposed by:</p>
+                <pre class="flowchart">GET /api/market-maker/state</pre>
+                <p>The state includes inventory, inventory limit, status, bid/ask enablement, and related display fields. <code>ExchangeSimulator</code> updates market-maker inventory from fills and disables one side as inventory approaches configured thresholds.</p>
+            </div>
+            <div class="section">
+                <h2 class="section-title">Client Applications</h2>
+                <div class="section-body">
+                <h3>Browser Terminal</h3>
+                <p>The browser terminal is served directly by the ASP.NET Core app from <code>wwwroot</code>. It uses:</p>
+                <ul class="feature-list">
+                    <li><code>index.html</code> for the live trading terminal</li>
+                    <li><code>architecture.html</code>, <code>performance.html</code>, <code>concurrency.html</code>, and <code>replay.html</code> for explainer pages</li>
+                    <li><code>js/terminal.js</code> for SignalR, REST polling, order submission, depth, lifecycle, market-maker demo, and UI updates</li>
+                    <li>CSS under <code>wwwroot/css</code></li>
+                </ul>
+                <h3>WPF Terminal</h3>
+                <p>The WPF terminal is a separate .NET 8 Windows desktop project that talks to the same backend:</p>
+                <pre class="flowchart">MainWindow / MainWindowViewModel
+├── TradeHubClient       → SignalR /tradehub
+├── TradeApiClient       → REST APIs
+├── TerminalFeedProcessor → client-side coalescing/drain queue
+└── DispatcherTimer loops → render, clock, stats, and message-rate updates</pre>
+                <p>It shows live prices, ticker/feed rows, order-flow aggregation, depth, lifecycle, trade monitor, positions, market-maker state, execution stats, and system metrics. It submits demo market buy orders and can reset demo state through REST.</p>
+            </div>
+            <div class="section">
+                <h2 class="section-title">Latency and Metrics</h2>
+                <div class="section-body">
+                <p>The market-data path records server-side latency and byte estimates around SignalR snapshot broadcast. The order path returns simulated latency components around risk, route, exchange, and fill stages.</p>
+                <p>Example order latency breakdown:</p>
+                <pre class="code-block">Risk Check     0.8ms
+Route          2.4ms
+Exchange       7.1ms
+Fill          31.4ms
+Total         41.7ms</pre>
+                <p>These are demo timings measured around simulated <code>Task.Delay</code> hops and deterministic latency functions. They are useful for explaining order-path mechanics, not for claiming production exchange latency.</p>
+            </div>
+            <div class="section">
+                <h2 class="section-title">API Surface</h2>
+                <div class="section-body">
+                <h3>Market Data / Metrics</h3>
+                <table class="data-table">
+                    <thead><tr><th>Endpoint</th><th>Description</th></tr></thead>
+                    <tbody>
+                        <tr><td><code>GET /api/health</code></td><td>Basic health check</td></tr>
+                        <tr><td><code>GET /api/metrics</code></td><td>Performance snapshot</td></tr>
+                        <tr><td><code>GET /api/metrics/stream</code></td><td>SSE metrics stream</td></tr>
+                        <tr><td><code>GET /api/queue/stats</code></td><td>Market-data queue/coalescing/lossless stats</td></tr>
+                        <tr><td><code>GET /api/orders/queue/stats</code></td><td>Order-command queue stats</td></tr>
+                        <tr><td><code>GET /api/concurrency/threads</code></td><td>Demo thread/rate breakdown for concurrency page</td></tr>
+                        <tr><td><code>GET /api/ticks/recent</code></td><td>Recent in-memory tick log</td></tr>
+                        <tr><td><code>GET /api/ticks/from/{sequenceId}</code></td><td>Recent ticks from sequence</td></tr>
+                        <tr><td><code>GET /api/ticks/stats</code></td><td>Lossless tick store stats</td></tr>
+                        <tr><td><code>GET /api/system/metrics</code></td><td>CPU/memory/thread metrics snapshot</td></tr>
+                    </tbody>
+                </table>
+                <h3>Replay</h3>
+                <table class="data-table">
+                    <thead><tr><th>Endpoint</th><th>Description</th></tr></thead>
+                    <tbody>
+                        <tr><td><code>GET /api/replay/scenarios</code></td><td>Available replay scenarios</td></tr>
+                        <tr><td><code>POST /api/replay/start</code></td><td>Start a scenario replay</td></tr>
+                        <tr><td><code>POST /api/replay/recent</code></td><td>Replay recent ticks</td></tr>
+                        <tr><td><code>POST /api/replay/journal/from/{sequenceId}</code></td><td>Replay journal ticks from sequence</td></tr>
+                        <tr><td><code>POST /api/replay/stop</code></td><td>Stop replay</td></tr>
+                        <tr><td><code>GET /api/replay/state</code></td><td>Current replay state</td></tr>
+                    </tbody>
+                </table>
+                <h3>Order / Execution</h3>
+                <table class="data-table">
+                    <thead><tr><th>Endpoint</th><th>Description</th></tr></thead>
+                    <tbody>
+                        <tr><td><code>POST /api/orders</code></td><td>Submit an order through the command queue</td></tr>
+                        <tr><td><code>GET /api/orders</code></td><td>All known orders</td></tr>
+                        <tr><td><code>GET /api/orders/open</code></td><td>Working/open orders</td></tr>
+                        <tr><td><code>DELETE /api/orders/{orderId}</code></td><td>Cancel an open order through the command queue</td></tr>
+                        <tr><td><code>PUT /api/orders/{orderId}</code></td><td>Modify an open order through the command queue</td></tr>
+                        <tr><td><code>GET /api/executions</code></td><td>Execution reports</td></tr>
+                        <tr><td><code>GET /api/lifecycle/recent</code></td><td>Recent order lifecycle events</td></tr>
+                        <tr><td><code>GET /api/execution-stats</code></td><td>Order/fill/cancel/PnL statistics</td></tr>
+                        <tr><td><code>GET /api/trade-monitor</code></td><td>Trade-monitor rows for terminal UI</td></tr>
+                        <tr><td><code>GET /api/depth/{symbol}</code></td><td>Current synthetic DOM snapshot</td></tr>
+                        <tr><td><code>GET /api/positions</code></td><td>Current positions</td></tr>
+                        <tr><td><code>GET /api/market-maker/state</code></td><td>Inventory-risk state for market-maker demo</td></tr>
+                        <tr><td><code>POST /api/demo/reset</code></td><td>Reset in-memory demo trading state</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="section">
+                <h2 class="section-title">Concurrency Model</h2>
+                <div class="section-body">
+                <table class="data-table">
+                    <thead><tr><th>Component</th><th>Model</th><th>Notes</th></tr></thead>
+                    <tbody>
+                        <tr><td><code>MarketDataSimulator</code></td><td><code>BackgroundService</code></td><td>Generates synthetic ticks continuously and publishes to <code>IMarketDataBus</code></td></tr>
+                        <tr><td><code>InMemoryMarketDataBus</code></td><td>singleton fan-out</td><td>Synchronously invokes fixed in-process subscribers</td></tr>
+                        <tr><td><code>LosslessTickStore</code></td><td><code>BackgroundService</code> + bounded channel</td><td>Stores recent accepted ticks and optional journal batches</td></tr>
+                        <tr><td><code>TradeQueueProcessor</code></td><td><code>BackgroundService</code> + bounded channel</td><td>Coalesces latest symbol snapshots for SignalR</td></tr>
+                        <tr><td><code>ReplayEngine</code></td><td>async tasks + cancellation token</td><td>Runs one replay at a time and publishes replay state</td></tr>
+                        <tr><td><code>OrderCommandQueue</code></td><td>bounded channel</td><td>Serializes submit/cancel/modify commands with <code>FullMode=Wait</code></td></tr>
+                        <tr><td><code>OrderCommandProcessor</code></td><td><code>BackgroundService</code></td><td>Single-reader FIFO command dispatch loop</td></tr>
+                        <tr><td><code>ExchangeSimulator</code></td><td>singleton + locks</td><td>Protects in-memory orders, executions, lifecycle, telemetry, market-maker inventory, and synthetic DOM</td></tr>
+                        <tr><td><code>PositionManager</code></td><td>singleton + locks</td><td>Protects position state; computes realized/unrealized PnL</td></tr>
+                        <tr><td><code>TradeHub</code></td><td>SignalR hub</td><td>Supports connection logging and symbol groups; broadcasts are currently sent to all clients by the processor</td></tr>
+                        <tr><td>Browser terminal</td><td>SignalR + REST + timers</td><td>Coalesced snapshots plus REST polling/actions</td></tr>
+                        <tr><td>WPF terminal</td><td>SignalR + REST + dispatcher timers</td><td>Client-side queue/drain to keep UI rendering bounded</td></tr>
+                    </tbody>
+                </table>
+                <p>The market-data path uses separate channels for authoritative storage and UI coalescing. The order path now also uses a channel: a bounded FIFO command queue that serializes mutating order operations before they reach the exchange simulator.</p>
+            </div>
+            <div class="section">
+                <h2 class="section-title">Deployment Topology</h2>
+                <div class="section-body">
+                <p>The API app is designed to run locally or as a containerized ASP.NET Core service on Azure Container Apps. The WPF client is a separate desktop executable that can point at the hosted API URL.</p>
+                <pre class="flowchart">Azure Container Apps or local Kestrel
+├── ASP.NET Core API
+├── Static browser terminal
+├── SignalR hub
+├── REST APIs
+├── background market-data services
+├── in-memory order/exchange/position state
+└── optional tick journal adapters
+
+Optional Azure integrations
+├── Blob Storage journal
+├── Event Hubs journal adapter
+├── Container Registry
+└── Log Analytics
+
+Desktop client
+└── WPF terminal → same public API + SignalR hub</pre>
+            </div>
+            <div class="section">
+                <h2 class="section-title">What This Demo Demonstrates Well</h2>
+                <div class="section-body">
+                <ul class="feature-list">
+                    <li>high-throughput synthetic market-data generation</li>
+                    <li>in-process market-data fan-out to multiple consumers</li>
+                    <li>bounded-channel backpressure with different policies per path</li>
+                    <li>coalesced SignalR UI snapshots</li>
+                    <li>sequence IDs and replay-oriented tick storage</li>
+                    <li>optional local/Azure tick journaling</li>
+                    <li>deterministic replay scenarios and historical replay</li>
+                    <li>REST order submission/cancel/modify</li>
+                    <li>FIFO in-process order command queue</li>
+                    <li>pre-trade risk checks</li>
+                    <li>stateful synthetic DOM liquidity consumption</li>
+                    <li>partial fills and average fill price</li>
+                    <li>resting demo limit orders</li>
+                    <li>order lifecycle, execution reports, and latency breakdown</li>
+                    <li>position updates with realized and unrealized PnL</li>
+                    <li>market-maker inventory-risk display</li>
+                    <li>browser and WPF clients sharing the same backend</li>
                 </ul>
             </div>
-        </div>
-
-        <!-- ── Failure Handling ── -->
-        <div class="section">
-            <h2 class="section-title">Failure Handling</h2>
-            <div class="section-body">
-                <table class="data-table">
-                    <thead>
-                        <tr>
-                            <th>FAILURE MODE</th>
-                            <th>BEHAVIOR</th>
-                            <th>RECOVERY</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <tr>
-                            <td>Queue full (backpressure)</td>
-                            <td>DropOldest — newest data preserved</td>
-                            <td>Automatic; counter incremented for observability</td>
-                        </tr>
-                        <tr>
-                            <td>Client disconnect</td>
-                            <td>SignalR automatic reconnect (0s, 1s, 2s, 5s, 10s)</td>
-                            <td>Client resumes subscription; missed data is acceptable (live feed)</td>
-                        </tr>
-                        <tr>
-                            <td>Exchange disconnect (simulated)</td>
-                            <td>Feed pauses; queue drains existing messages</td>
-                            <td>Reconnect resumes feed; UI shows disconnect indicator</td>
-                        </tr>
-                        <tr>
-                            <td>Consumer crash</td>
-                            <td>Channel buffers up to 10K messages</td>
-                            <td>Hosted service restarts; buffer provides grace period</td>
-                        </tr>
-                    </tbody>
-                </table>
+            <div class="section">
+                <h2 class="section-title">What This Demo Intentionally Does Not Implement</h2>
+                <div class="section-body">
+                <ul class="feature-list">
+                    <li>real exchange connectivity</li>
+                    <li>FIX protocol</li>
+                    <li>real exchange-grade matching engine</li>
+                    <li>real price-time-priority multi-participant book</li>
+                    <li>order queue position or self-match prevention</li>
+                    <li>separate deployable OMS/EMS/gateway/PnL services</li>
+                    <li>Kafka/EventStore event bus</li>
+                    <li>persistent order/execution/position database</li>
+                    <li>multi-account permissions</li>
+                    <li>production-grade risk/compliance controls</li>
+                    <li>fees, commissions, corporate actions, or account-level margin</li>
+                </ul>
+                <p>These boundaries are intentional so the project remains a focused portfolio demo rather than an incomplete production trading system.</p>
             </div>
-        </div>
-
-        <!-- ── Deployment Topology ── -->
-        <div class="section">
-            <h2 class="section-title">Deployment Topology</h2>
-            <div class="flowchart">
-┌──────────────────────────────────────────────────────────┐
-│  Azure Container Apps Environment                        │
-│                                                          │
-│  ┌────────────────────────────────────────────────────┐  │
-│  │  Container: tradedemo-api                          │  │
-│  │  ┌──────────────┐  ┌───────────────────────────┐  │  │
-│  │  │ ASP.NET Core │  │ Background Services        │  │  │
-│  │  │ (Kestrel)    │  │ - MarketDataSimulator     │  │  │
-│  │  │ - SignalR Hub│  │ - TradeQueueProcessor     │  │  │
-│  │  │ - Static UI  │  │ - PerformanceMetrics      │  │  │
-│  │  │ - REST API   │  │                           │  │  │
-│  │  └──────────────┘  └───────────────────────────┘  │  │
-│  └────────────────────────────────────────────────────┘  │
-│                          │                               │
-│  ┌───────────────────────▼────────────────────────────┐  │
-│  │  Log Analytics Workspace                           │  │
-│  │  (Structured logs, metrics, traces)                │  │
-│  └────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────┘
-               │
-               ▼
-┌──────────────────────────┐
-│  Azure Service Bus       │
-│  Queue: market-events    │
-│  (Production path)       │
-└──────────────────────────┘</div>
-        </div>
     </div>
 </body>
 </html>

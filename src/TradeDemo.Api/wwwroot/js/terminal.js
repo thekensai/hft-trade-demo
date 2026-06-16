@@ -1047,6 +1047,8 @@ function appendLifecycle(events) {
         if (id) state.lifecycleEventIds.delete(id);
         row?.remove();
     }
+
+    dom.orderLifecycle.scrollTop = dom.orderLifecycle.scrollHeight;
 }
 
 function addLifecycleMessage(stage, message) {
@@ -1054,6 +1056,7 @@ function addLifecycleMessage(stage, message) {
     dom.orderLifecycle.querySelector(".lifecycle-row.muted")?.remove();
     dom.orderLifecycle.insertAdjacentHTML("beforeend", lifecycleRow({ stage, message, timestamp: new Date().toISOString() }));
     while (dom.orderLifecycle.children.length > state.maxLifecycleRows) dom.orderLifecycle.firstElementChild.remove();
+    dom.orderLifecycle.scrollTop = dom.orderLifecycle.scrollHeight;
 }
 
 function lifecycleRow(evt) {

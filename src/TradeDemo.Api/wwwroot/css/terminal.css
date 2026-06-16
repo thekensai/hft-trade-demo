@@ -13,8 +13,15 @@
     --blue: #3b82f6;
     --yellow: #f59e0b;
     --cyan: #06b6d4;
-    --font-mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', 'Cascadia Code', monospace;
+    --font-mono: 'Cascadia Mono', 'Cascadia Code', Consolas, 'Roboto Mono', 'JetBrains Mono', 'SF Mono', monospace;
 }
+
+html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: geometricPrecision;
+}
+
 
 * {
     margin: 0;
@@ -530,6 +537,7 @@ body {
 .depth-panel {
     grid-column: 4;
     grid-row: 2;
+    min-height: 0;
 }
 
 .consumed-liquidity {
@@ -544,9 +552,14 @@ body {
 }
 
 .depth-book {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
     display: flex;
     flex-direction: column;
     gap: 2px;
+    padding-right: 2px;
     font-size: 11px;
     font-variant-numeric: tabular-nums;
 }
@@ -764,8 +777,13 @@ body {
     align-items: center;
     color: var(--text-secondary);
     display: flex;
-    font-size: 10px;
+    font-size: 9px;
     gap: 6px;
+    line-height: 1.2;
+}
+
+.market-maker-toggle input {
+    margin: 0;
 }
 
 .mm-risk-summary {

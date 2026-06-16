@@ -4,17 +4,17 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Trade Signal Terminal</title>
-    <link rel="stylesheet" href="css/shared.css?v=20260615111307">
-    <link rel="stylesheet" href="css/terminal.css?v=20260615111307">
+    <link rel="stylesheet" href="css/shared.css?v=20260616061515">
+    <link rel="stylesheet" href="css/terminal.css?v=20260616061515">
 </head>
 <body>
     <nav class="site-nav">
         <a href="/" class="nav-logo">◈ TRADE TERMINAL</a>
         <a href="/" class="nav-link active">Live Terminal</a>
-        <a href="/architecture.html" class="nav-link">Architecture</a>
-        <a href="/performance.html" class="nav-link">Performance</a>
-        <a href="/concurrency.html" class="nav-link">Concurrency</a>
         <a href="/replay.html" class="nav-link">Replay Engine</a>
+        <a href="/performance.html" class="nav-link">Performance</a>
+        <a href="/architecture.html" class="nav-link">Architecture</a>
+        <a href="/concurrency.html" class="nav-link">Concurrency</a>
         <span class="nav-spacer"></span>
     </nav>
     <div class="terminal-container">
@@ -68,10 +68,8 @@
                         <span>Enable Market Maker Liquidity</span>
                     </label-->
                     <div class="mm-risk-summary">
-                        <div><span>MM Inventory:</span><strong id="mmInventory">0</strong></div>
                         <div><span>MM Quote Limit:</span><strong id="mmInventoryLimit">100</strong></div>
-                        <div><span>Status:</span><strong id="mmStatus">NORMAL</strong></div>
-                        <div><span>Quotes:</span><strong id="mmQuotes">BID/ASK</strong></div>
+                        <div><span>Status:</span><strong id="mmStatus">OFF</strong></div>
                     </div>
                     <div class="position-summary">
                         <div class="position-row"><span id="positionLabel">Position:</span><strong id="positionQty">—</strong></div>
@@ -168,6 +166,6 @@
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
-    <script src="js/terminal.js?v=20260615111307"></script>
+    <script src="js/terminal.js?v=20260616061515"></script>
 </body>
 </html>

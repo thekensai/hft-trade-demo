@@ -1,196 +1,298 @@
-# TradeDemo — Real-Time Trading Signal Terminal
+# TradeDemo — Real-Time Trading Infrastructure Demo
 
-A web-based demo of a high-throughput trading signal UI backed by queue-processed market data simulation, deployed on Azure.
+TradeDemo is a .NET 8 portfolio/demo application for high-throughput market-data streaming and order/execution simulation. It includes:
 
-Run locally with dotnet run from src/TradeDemo.Api and open https://localhost:5001. 
+- an ASP.NET Core API host with static browser UI, SignalR, REST APIs, and background services
+- a browser trading terminal built with static HTML/CSS/vanilla JavaScript
+- a WPF desktop terminal that connects to the same backend
+- synthetic market-data generation with bounded-channel backpressure
+- a FIFO order command queue, risk checks, synthetic depth-of-market fills, lifecycle events, and PnL
+- replay support from generated scenarios, recent in-memory ticks, and optional tick journals
 
-## Architecture
+This is not a production trading system or real exchange gateway. It is a focused demo of trading-system mechanics: fan-out, coalescing, replay, queueing, risk checks, partial fills, inventory risk, and metrics.
 
+## Solution Layout
+
+```text
+TradeDemo.sln
+├── src/TradeDemo.Api
+│   ├── Program.cs                     # Minimal APIs, SignalR, DI, static files
+│   ├── Hubs/TradeHub.cs               # SignalR hub
+│   ├── Services/                      # market data, replay, order queue, exchange, risk, positions
+│   ├── Journal/                       # null/local/blob/event-hubs tick journal adapters
+│   └── wwwroot/                       # browser terminal + explainer pages
+│
+├── src/TradeDemo.Wpf
+│   ├── MainWindow.xaml                # desktop terminal shell
+│   ├── ViewModels/                    # MVVM state and commands
+│   └── Services/                      # REST + SignalR clients, client-side feed processor
+│
+└── src/TradeDemo.Tests                # test project
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  Azure App Service (Web App)                                │
-│  ┌───────────────────────────────────────────────────────┐  │
-│  │  ASP.NET Core API                                     │  │
-│  │  ┌─────────────────┐    ┌──────────────────────────┐  │  │
-│  │  │ MarketData      │───▶│ Bounded Channel (Queue)  │  │  │
-│  │  │ Simulator       │    │ 10K capacity, backpressure│  │  │
-│  │  │ (15 instruments)│    └──────────┬───────────────┘  │  │
-│  │  └─────────────────┘               │                  │  │
-│  │                          ┌─────────▼───────────┐      │  │
-│  │                          │ TradeQueueProcessor │      │  │
-│  │                          │ (batch consume)     │      │  │
-│  │                          └─────────┬───────────┘      │  │
-│  │                                    │ SignalR           │  │
-│  │  HTTP Order API ─▶ OrderCommandQueue ─▶ Processor ─▶ Exchange/Risk/Position │
-│  │  ┌────────────────────────────────▼──────────────┐   │  │
-│  │  │ Static Files (Trading Terminal UI)             │   │  │
-│  │  │ - Fast-scroll signal feed                      │   │  │
-│  │  │ - Live price grid with flash effects           │   │  │
-│  │  │ - Order flow heatmap                           │   │  │
-│  │  │ - Ticker tape                                  │   │  │
-│  │  └───────────────────────────────────────────────┘   │  │
-│  └───────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────┘
-        │
-        │ (Optional: Azure Service Bus for production)
-        ▼
-┌─────────────────────────────┐
-│ Azure Service Bus Queue     │
-│ "market-events"             │
-│ - Partitioned               │
-│ - 5min TTL, batch enabled   │
-└─────────────────────────────┘
+
+For the deeper architecture document, see [ARCHITECTURE.md](ARCHITECTURE.md).
+
+## Current Architecture
+
+```text
+Browser Terminal / WPF Terminal
+
+├── SignalR /tradehub
+│   ├── TradeSignals snapshots
+│   ├── Stats
+│   └── ReplayStateChanged
+│
+└── REST APIs
+    ├── market data, metrics, queue stats, and replay
+    ├── order submit/cancel/modify and order queue stats
+    ├── executions, lifecycle, trade monitor, and execution stats
+    ├── depth, positions, and market-maker state
+    └── demo reset
+
+ASP.NET Core API Host
+
+├── MarketDataSimulator
+│   └── InMemoryMarketDataBus
+│       ├── LosslessTickStore → recent ring buffer + optional journal
+│       └── TradeQueueProcessor → coalesced SignalR UI stream
+│
+├── ReplayEngine
+│   ├── scenario replay
+│   ├── recent tick replay
+│   └── journal replay
+│
+└── Order/Execution Simulation
+    ├── REST endpoints in Program.cs
+    └── OrderCommandQueue → OrderCommandProcessor
+        └── ExchangeOrderCommandExecutor
+            └── ExchangeSimulator
+                ├── RiskEngine
+                ├── stateful synthetic DOM
+                ├── order lifecycle + execution reports
+                ├── partial fills / open orders / cancel / modify
+                ├── market-maker inventory state
+                └── PositionManager → realized + unrealized PnL
 ```
+
+Important implementation boundaries:
+
+- Market data uses in-process fan-out via `IMarketDataBus`; it is not Kafka/EventStore.
+- Order mutations use an in-process `Channel<QueuedOrderCommand>`; it is not Azure Service Bus.
+- Orders, executions, depth, positions, and lifecycle events are in-memory only.
+- Tick journaling is optional and disabled by default.
+- The exchange simulator demonstrates fills and order lifecycle; it is not a real matching engine.
 
 ## Run Locally
+
+### Browser/API host
 
 ```bash
 cd src/TradeDemo.Api
 dotnet run
-# Open https://localhost:5001
 ```
 
-## Deploy to Azure
+Launch settings expose both:
 
-Uses **Azure Container Apps** (consumption-based, no App Service VM quota needed).
+- <https://localhost:5001>
+- <http://localhost:5000>
 
-### 1. Bootstrap Azure prerequisites
+### WPF terminal
+
+Start the API host first, then run the desktop project:
 
 ```bash
-.\infra\setup-azure.ps1
+dotnet run --project src/TradeDemo.Wpf
 ```
 
-### 2. Build, Deploy Infrastructure & Deploy Container
+The WPF terminal defaults to the hosted backend URL in its view model, but the UI exposes the backend URL so it can point at a local API instance.
 
-Run this when infrastructure changes, or for the first deployment. The script builds the container image first, then passes that image into `infra/main.bicep` so the required `containerImage` parameter is always explicit.
-
-```bash
-.\infra\deploy-container.ps1 -DeployInfra
-```
-
-### 3. Deploy App-Only Changes
-
-For code/frontend-only changes after infrastructure already exists:
+### Build everything
 
 ```bash
-.\infra\deploy-container.ps1
-```
-
-Or run with explicit settings:
-```bash
-.\infra\setup-azure.ps1 -ResourceGroupName rg-tradedemo -Location australiaeast
-.\infra\deploy-container.ps1 -ResourceGroupName rg-tradedemo -Location australiaeast -DeployInfra
+dotnet build TradeDemo.sln
 ```
 
 ## Features
 
 | Feature | Description |
-|---------|-------------|
-| **Fast-scroll signal feed** | 60-row bounded feed with BUY/SELL color coding, sub-100ms animation |
-| **Live price grid** | 15 instruments with green/red flash on tick |
-| **Order flow heatmap** | Buy vs sell volume ratio per symbol |
-| **Ticker tape** | Continuous horizontal scroll of latest prices |
-| **Queue simulation** | Bounded Channel (10K) with backpressure + drop-oldest semantics |
-| **Order command queue** | HTTP order commands serialize through a bounded FIFO Channel before exchange/risk/position processing |
-| **Throughput stats** | Real-time msg/sec, queue depth, processed/dropped counters |
-| **High-frequency generation** | 5-20 events per 20-80ms tick (~200-500 events/sec) |
-| **Lock-free latency metrics** | p50/p95/p99 percentiles via Interlocked CAS + ArrayPool |
-| **Replay engine** | Deterministic playback with Constant/Burst/FlashCrash/Ramp profiles |
-| **Multi-page engineering showcase** | Architecture, performance, concurrency, and replay explanation pages |
+|---|---|
+| Browser trading terminal | Live price grid, signal feed, ticker tape, depth, lifecycle, positions, market-maker state, metrics |
+| WPF trading terminal | Desktop client using the same REST APIs and SignalR hub |
+| High-throughput market data | `MarketDataSimulator` generates synthetic ticks across equities, futures-style symbols, and crypto |
+| In-process market-data bus | `InMemoryMarketDataBus` fans each tick to independent subscribers |
+| Coalesced SignalR stream | `TradeQueueProcessor` drains raw ticks and broadcasts latest-by-symbol snapshots |
+| Recent tick storage | `LosslessTickStore` keeps a 500K tick ring buffer for replay-oriented workflows |
+| Optional tick journal | Null, local segment file, Azure Blob, and Azure Event Hubs adapters behind `ITickJournal` |
+| Replay engine | Scenario replay, recent tick replay, and journal replay |
+| FIFO order command queue | Submit/cancel/modify operations serialize through `OrderCommandQueue` and `OrderCommandProcessor` |
+| Risk engine | Quantity, side, max quantity, notional, fat-finger, position-limit, and demo throttle checks |
+| Exchange simulator | Stateful synthetic DOM, market/limit behavior, partial fills, open orders, cancel, modify |
+| Position and PnL | `PositionManager` tracks quantity, average price, realized PnL, mark price, and unrealized PnL |
+| Metrics | Queue depth, processed/dropped/coalesced counts, latency percentiles, GC, CPU, memory, thread count |
+
+## Key Runtime Settings
+
+| Component | Current behavior |
+|---|---|
+| `TradeQueueProcessor` | `Channel<TradeSignal>` capacity `100_000`, `DropOldest`, single reader, multiple writers, ~33ms snapshot cadence |
+| `LosslessTickStore` | `Channel<TradeSignal>` capacity `1_000_000`, recent ring capacity `500_000`, optional journal batching |
+| `OrderCommandQueue` | `Channel<QueuedOrderCommand>` capacity `4_096`, `FullMode=Wait`, single-reader FIFO command loop |
+| `PerformanceMetrics` | fixed `long[4096]` latency sample buffer, `Interlocked` counters, `ArrayPool<long>` percentile sorting |
+| GC latency | `GCSettings.LatencyMode = GCLatencyMode.SustainedLowLatency` in `Program.cs` |
 
 ## Site Pages
 
-The deployed site has multiple pages, each targeting a specific engineering concern:
-
 | Page | URL | What it shows |
-|------|-----|---------------|
-| **Live Terminal** | `/` | Real-time trading UI with signal feed, price grid, order flow |
-| **Architecture** | `/architecture.html` | System design, pipeline flow, latency budget, scaling strategy |
-| **Performance** | `/performance.html` | Live p50/p95/p99 latency bars, GC metrics, allocation rate |
-| **Concurrency** | `/concurrency.html` | Threading model, Channels\<T\> patterns, lock-free code samples |
-| **Replay Engine** | `/replay.html` | Configurable scenario playback, traffic profile visualization |
+|---|---|---|
+| Live Terminal | `/` | Real-time trading UI with market data, orders, depth, lifecycle, positions, and metrics |
+| Replay Engine | `/replay.html` | Scenario playback and replay controls |
+| Performance | `/performance.html` | Latency, throughput, GC, allocation, CPU, memory, and queue metrics |
+| Architecture | `/architecture.html` | Current system architecture and API topology |
+| Concurrency | `/concurrency.html` | Actual channel, background-service, locking, and client concurrency model |
 
-## API Endpoints
+## API Surface
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/metrics` | GET | Current performance snapshot (latencies, GC, allocations) |
-| `/api/metrics/stream` | GET | Server-Sent Events stream of metrics (1/sec) |
-| `/api/queue/stats` | GET | Market-data queue depth, processed count, dropped count |
-| `/api/orders/queue/stats` | GET | Order command queue depth, processed count, failures, queue wait, processing time |
-| `/api/replay/scenarios` | GET | Available replay scenarios |
-| `/api/replay/start/{id}` | POST | Start a replay scenario |
-| `/api/replay/stop` | POST | Stop current replay |
-| `/api/replay/state` | GET | Current replay engine state |
-| `/tradehub` | WebSocket | SignalR hub for real-time trade signals |
+### Market Data / Metrics
 
-## Azure Resources
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | `/api/health` | Basic health check |
+| GET | `/api/metrics` | Performance snapshot |
+| GET | `/api/metrics/stream` | SSE metrics stream |
+| GET | `/api/queue/stats` | Market-data queue/coalescing/lossless stats |
+| GET | `/api/orders/queue/stats` | Order-command queue stats |
+| GET | `/api/concurrency/threads` | Demo thread/rate breakdown for concurrency page |
+| GET | `/api/ticks/recent` | Recent in-memory tick log |
+| GET | `/api/ticks/from/{sequenceId}` | Recent ticks from sequence |
+| GET | `/api/ticks/stats` | Lossless tick store stats |
+| GET | `/api/system/metrics` | CPU/memory/thread metrics snapshot |
 
-- **Container Apps Environment** (Consumption): Hosts .NET 8 container, WebSockets supported, auto-scale 1-3 replicas
-- **Log Analytics Workspace**: Container app logs and monitoring
-- **Service Bus** (Standard): Queue `market-events` for production event ingestion
+### Replay
 
-## Short URL
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | `/api/replay/scenarios` | Available replay scenarios |
+| POST | `/api/replay/start` | Start a scenario replay with a `ReplayScenario` JSON body |
+| POST | `/api/replay/recent?count=10000&speed=1` | Replay recent in-memory ticks |
+| POST | `/api/replay/journal/from/{sequenceId}?count=10000&speed=1` | Replay journal ticks from a sequence ID |
+| POST | `/api/replay/stop` | Stop replay |
+| GET | `/api/replay/state` | Current replay state |
 
-Use a custom domain to get a short URL like `trade.example.com` instead of the Azure-managed hostname.
+### Order / Execution
 
-Subdomain flow:
+| Method | Endpoint | Description |
+|---|---|---|
+| POST | `/api/orders` | Submit an order through the command queue |
+| GET | `/api/orders` | All known orders |
+| GET | `/api/orders/open` | Working/open orders |
+| DELETE | `/api/orders/{orderId}` | Cancel an open order through the command queue |
+| PUT | `/api/orders/{orderId}` | Modify an open order through the command queue |
+| GET | `/api/executions` | Execution reports |
+| GET | `/api/lifecycle/recent` | Recent order lifecycle events |
+| GET | `/api/execution-stats` | Order/fill/cancel/PnL statistics |
+| GET | `/api/trade-monitor` | Trade-monitor rows for terminal UI |
+| GET | `/api/depth/{symbol}` | Current synthetic depth-of-market snapshot |
+| GET | `/api/positions` | Current positions |
+| GET | `/api/market-maker/state` | Inventory-risk state for market-maker demo |
+| POST | `/api/demo/reset` | Reset in-memory demo trading state |
+
+### SignalR
+
+| Endpoint | Messages |
+|---|---|
+| `/tradehub` | `TradeSignals`, `Stats`, `ReplayStateChanged` |
+
+## Replay and Tick Journaling
+
+Replay has two modes:
+
+1. **Scenario replay** generates fresh synthetic ticks, appends them to `LosslessTickStore`, and sends them to the UI path.
+2. **Historical replay** reads recent or journal ticks and sends them to the UI path only, avoiding duplicate authoritative storage.
+
+Journaling is disabled by default. Enable a local journal with environment variables:
 
 ```powershell
-.\bind-custom-domain.ps1 -Hostname trade.example.com
+$env:TickJournal__Enabled = "true"
+$env:TickJournal__Provider = "Local"
+$env:TickJournal__Local__DirectoryPath = "data/tick-journal"
+dotnet run --project src/TradeDemo.Api
 ```
 
-That prints the exact DNS records you need to create:
+Journal files are written relative to the API process working directory. When running from `src/TradeDemo.Api`, the default local path is:
 
-- `CNAME trade.example.com -> <your container app fqdn>`
-- `TXT asuid.trade.example.com -> <your verification id>`
-
-After those records propagate, bind the hostname:
-
-```powershell
-.\bind-custom-domain.ps1 -Hostname trade.example.com -Bind
-```
-
-Root domain flow:
-
-```powershell
-.\bind-custom-domain.ps1 -Hostname example.com -ApexDomain
-```
-
-That prints the `A` and `TXT` records needed for the apex domain. After propagation:
-
-```powershell
-.\bind-custom-domain.ps1 -Hostname example.com -ApexDomain -Bind
-```
-
-Subdomains are simpler than apex/root domains and are the recommended option for this project.
-
-## Notes
-
-- Uses Azure Container Apps instead of App Service to avoid App Service VM quota restrictions.
-- `setup-azure.ps1` registers the required providers: `Microsoft.App`, `Microsoft.OperationalInsights`, `Microsoft.ContainerRegistry`, and `Microsoft.ServiceBus`.
-- `deploy-container.ps1` uses `.NET PublishContainer` and avoids the `az containerapp up` ACR build path, which hit an Azure CLI bug and ACR Tasks restrictions in this subscription.
-- `bind-custom-domain.ps1` prints the exact DNS records for a custom hostname and can bind the hostname after propagation.
-- Container Apps consumption plan has no upfront VM quota requirement.
-
-
-Added journal replay support:
-
-
-POST /api/replay/journal/from/{sequenceId}?count=10000&speed=1
-This reads from ITickJournalReader and replays to the UI path only.
-
-How to enable local journal
-Run with env vars:
-
-
-$env:TickJournal__Enabled="true"
-$env:TickJournal__Provider="Local"
-$env:TickJournal__Local__DirectoryPath="data/tick-journal"
-dotnet run
-Then journal files should appear under:
-
-
+```text
 src/TradeDemo.Api/data/tick-journal/
-Important note
-Blob and Event Hubs adapters are implemented behind the same interfaces, but Azure infra/config still needs to be provided before using them in deployment.
+```
+
+Blob and Event Hubs journal adapters are implemented behind the same interfaces, but deployment credentials/configuration must be supplied before using them outside local development.
+
+## Azure Deployment
+
+The repository includes Azure Container Apps infrastructure scripts under [infra/](infra/).
+
+### 1. Bootstrap Azure prerequisites
+
+```powershell
+.\infra\setup-azure.ps1
+```
+
+### 2. Build image, deploy infrastructure, and deploy container
+
+Use this for first deployment or when infrastructure changes:
+
+```powershell
+.\infra\deploy-container.ps1 -DeployInfra
+```
+
+### 3. Deploy app-only changes
+
+Use this after infrastructure already exists:
+
+```powershell
+.\infra\deploy-container.ps1
+```
+
+The Bicep template provisions:
+
+- Azure Container Apps environment
+- Container App for the ASP.NET Core API/static site
+- Log Analytics workspace
+- Azure Service Bus namespace and `market-events` queue
+
+The current application runtime uses in-process channels for the demo paths. Service Bus is provisioned as infrastructure scaffolding for a production-style ingestion extension, not as the active in-process market-data or order-command queue.
+
+## Custom Domain Helper
+
+Use [infra/bind-custom-domain.ps1](infra/bind-custom-domain.ps1) to print required DNS records and bind a hostname after propagation.
+
+Subdomain example:
+
+```powershell
+.\infra\bind-custom-domain.ps1 -Hostname trade.example.com
+.\infra\bind-custom-domain.ps1 -Hostname trade.example.com -Bind
+```
+
+Apex/root domain example:
+
+```powershell
+.\infra\bind-custom-domain.ps1 -Hostname example.com -ApexDomain
+.\infra\bind-custom-domain.ps1 -Hostname example.com -ApexDomain -Bind
+```
+
+Subdomains are simpler than apex/root domains and are recommended for this project.
+
+## Intentional Non-Goals
+
+TradeDemo intentionally does not implement:
+
+- real exchange connectivity
+- FIX protocol
+- real exchange-grade matching engine
+- real price-time-priority multi-participant book
+- order queue position or self-match prevention
+- separate deployable OMS/EMS/gateway/PnL services
+- Kafka/EventStore event bus
+- persistent order/execution/position database
+- multi-account permissions
+- production-grade risk/compliance controls
+- fees, commissions, corporate actions, or account-level margin
