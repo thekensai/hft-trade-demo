@@ -281,18 +281,15 @@ Apex/root domain example:
 
 Subdomains are simpler than apex/root domains and are recommended for this project.
 
-## Intentional Non-Goals
+## TBD
 
-TradeDemo intentionally does not implement:
-
-- real exchange connectivity
-- FIX protocol
-- real exchange-grade matching engine
+- real market signal and exchange connectivity
+- real matching engine
 - real price-time-priority multi-participant book
 - order queue position or self-match prevention
-- separate deployable OMS/EMS/gateway/PnL services
+- separate OMS/EMS/gateway/PnL services
 - Kafka/EventStore event bus
 - persistent order/execution/position database
 - multi-account permissions
-- production-grade risk/compliance controls
-- fees, commissions, corporate actions, or account-level margin
+- risk/compliance controls
+- fees, commissions
